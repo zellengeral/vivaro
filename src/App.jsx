@@ -14,7 +14,8 @@ import {
   nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile, nativeSetWater, nativeTestWater,
 } from "./native.js";
 import FinanceView from "./Finance.jsx";
-import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance } from "./financeLogic.js";
+import { WellnessSub, SUBMODULES, normalizeHx, mergeHx } from "./Wellness.jsx";
+import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance, addTransaction, todayISO } from "./financeLogic.js";
 import { LANGS, t, setLang, detectLang, locale, voiceLang, langInfo, hydrationTips } from "./i18n.js";
 
 setLang(detectLang());
@@ -1298,10 +1299,10 @@ function loadHealth() {
       if (!Array.isArray(hy.log)) hy.log = [];
       if (!Array.isArray(hy.days)) hy.days = [...DEFAULT_HYDRATION.days];
       if (!Array.isArray(hy.amounts) || hy.amounts.length !== 3) hy.amounts = [...DEFAULT_HYDRATION.amounts];
-      return { hydration: hy };
+      return normalizeHx({ ...h, hydration: hy });
     }
   } catch (e) { /* ignore */ }
-  return { hydration: { ...DEFAULT_HYDRATION, amounts: [...DEFAULT_HYDRATION.amounts], log: [] } };
+  return normalizeHx({ hydration: { ...DEFAULT_HYDRATION, amounts: [...DEFAULT_HYDRATION.amounts], log: [] } });
 }
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -1337,11 +1338,12 @@ const intervalLabel = (m) => {
   return t("A cada {h}", { h: r ? `${h} h ${r}` : `${h} h` });
 };
 
-function HealthView({ health, onChange, onAdd, onRemove, onTest }) {
+function HealthView({ health, onChange, onAdd, onRemove, onTest, wellness }) {
   const [sub, setSub] = useState(null);
   const hy = health.hydration;
   const today = totalForDay(hy.log, new Date());
   if (sub === "hidratacao") return <HydrationView hy={hy} onChange={onChange} onAdd={onAdd} onRemove={onRemove} onTest={onTest} onBack={() => setSub(null)} />;
+  if (sub && sub !== "hidratacao") return <WellnessSub id={sub} onBack={() => setSub(null)} {...wellness} />;
   const pct = Math.min(100, Math.round((today / Math.max(1, hy.goalMl)) * 100));
   return (
     <div className="max-w-xl space-y-4">
@@ -1356,7 +1358,13 @@ function HealthView({ health, onChange, onAdd, onRemove, onTest }) {
         </div>
         <ChevronRight size={18} style={{ color: C.inkSoft }} />
       </button>
-      <div className="text-xs text-center py-3 rounded-2xl" style={{ color: C.inkSoft, border: `1px dashed ${C.border}` }}>{t("Mais módulos de saúde em breve")}</div>
+      {SUBMODULES.map((m) => (
+        <button key={m.id} onClick={() => setSub(m.id)} className="w-full text-left rounded-2xl p-4 flex items-center gap-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: C.primarySoft }}><m.icon size={24} color={C.primary} /></div>
+          <div className="flex-1 min-w-0"><div className="font-bold" style={{ color: C.ink }}>{t(m.label)}</div><div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>{t(m.sub)}</div></div>
+          <ChevronRight size={18} style={{ color: C.inkSoft }} />
+        </button>
+      ))}
     </div>
   );
 }
@@ -2485,6 +2493,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(FIN_KEY, JSON.stringify(finance)); } catch (e) { /* ignore */ }
   }, [finance]);
+  const deleteTasksByIds = useCallback((ids) => { if (ids && ids.length) setTasks((prev) => prev.filter((x) => !ids.includes(x.id))); }, []);
+  const addExpense = useCallback((cents, description) => {
+    setFinance((f) => (f.accounts.length ? addTransaction(f, { type: "expense", amountCents: cents, date: todayISO(), accountId: f.accounts[0].id, description, categoryId: "c-health" }) : f));
+  }, []);
   const importFinance = useCallback((incoming) => setFinance((f) => mergeFinance(f, incoming)), []);
   const addTaskDirect = useCallback((task) => setTasks((prev) => [task, ...prev]), []);
 
@@ -2497,7 +2509,9 @@ export default function App() {
   }, []);
   const removeWater = useCallback((id) => setHealth((h) => ({ ...h, hydration: { ...h.hydration, log: h.hydration.log.filter((e) => e.id !== id) } })), []);
   const importHealth = useCallback((incoming) => {
-    if (!incoming || !incoming.hydration) return;
+    if (!incoming) return;
+    setHealth((h) => mergeHx(h, incoming));
+    if (!incoming.hydration) return;
     setHealth((h) => {
       const seen = new Set(h.hydration.log.map((e) => e.id));
       const extra = (incoming.hydration.log || []).filter((e) => e && e.id && !seen.has(e.id));
@@ -2739,7 +2753,7 @@ export default function App() {
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
         {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
-        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} />}
+        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}

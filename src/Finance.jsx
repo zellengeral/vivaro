@@ -5,10 +5,10 @@ import * as F from "./financeLogic.js";
 
 // Mesmas variáveis CSS de tema usadas em App.jsx
 const C = new Proxy({}, { get: (_, k) => `var(--v-${String(k)})` });
-const inputCls = "w-full px-3 py-2 rounded-lg border text-sm outline-none";
-const inputSt = { background: "var(--v-surfaceSunk)", borderColor: "var(--v-border)", color: "var(--v-ink)" };
+export const inputCls = "w-full px-3 py-2 rounded-lg border text-sm outline-none";
+export const inputSt = { background: "var(--v-surfaceSunk)", borderColor: "var(--v-border)", color: "var(--v-ink)" };
 
-function Sheet({ title, onClose, children, footer }) {
+export function Sheet({ title, onClose, children, footer }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" style={{ background: "rgba(28,31,36,0.5)" }}>
       <div className="w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }}>
@@ -22,17 +22,17 @@ function Sheet({ title, onClose, children, footer }) {
     </div>
   );
 }
-const Field = ({ label, children }) => (
+export const Field = ({ label, children }) => (
   <label className="block"><span className="block text-xs font-semibold mb-1" style={{ color: C.inkSoft }}>{label}</span>{children}</label>
 );
-const Btn = ({ children, onClick, kind = "primary", disabled, className = "" }) => (
+export const Btn = ({ children, onClick, kind = "primary", disabled, className = "" }) => (
   <button onClick={onClick} disabled={disabled} className={`px-4 py-2.5 rounded-xl font-semibold text-sm disabled:opacity-40 ${className}`}
     style={kind === "primary" ? { background: C.primary, color: "#fff" } : kind === "danger" ? { background: C.dangerSoft, color: C.danger } : { border: `1px solid ${C.border}`, color: C.ink }}>{children}</button>
 );
-const Card = ({ children, className = "", style }) => (
+export const Card = ({ children, className = "", style }) => (
   <div className={`rounded-2xl p-4 ${className}`} style={{ background: C.surface, border: `1px solid ${C.border}`, ...style }}>{children}</div>
 );
-const Bar = ({ pct, color }) => (
+export const Bar = ({ pct, color }) => (
   <div className="h-2 rounded-full overflow-hidden" style={{ background: C.surfaceSunk }}>
     <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, pct * 100))}%`, background: color }} />
   </div>

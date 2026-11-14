@@ -110,3 +110,6 @@ O mesmo código gera duas versões: o site (ptisp, `npm run build`) e o APK (Git
 - Backup unificado v4 (`tasks` + `health` + `finance`), restauro por junção de ids.
 - Botão "Adicionar" da hidratação alinhado; assistente de IA mais rápido (raciocínio mínimo, modelo em cache, contexto reduzido).
 - Documentação: `FINANCAS-SQLITE.md` (+ `docs/financas-schema.sql`).
+
+## v1.5.0 — Novos submódulos de Saúde
+Medicamentos (alertas diários com alarme, histórico de tomas, stock com aviso e despesa em Finanças), Consultas e exames (validade, renovação, anexos), Biometria (gráficos e IMC), Sono (cruza com tarefas concluídas), Humor, Pausas e respiração, Atividade física, Refeições e jejum. Tudo entra no backup (campo `health`).
