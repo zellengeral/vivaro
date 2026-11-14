@@ -1,0 +1,8 @@
+{
+  "appId": "pt.zellen.vivaro",
+  "appName": "Vivaro",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

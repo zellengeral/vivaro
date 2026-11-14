@@ -6,8 +6,13 @@ import {
   Download, Upload, Briefcase, User, GripVertical,
   Mic, Repeat, FileText, Link2, StickyNote, MapPin, MessageSquare,
   Paperclip, ChevronLeft, ChevronRight, Milestone,
-  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send,
+  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck,
 } from "lucide-react";
+import {
+  isNative, nativeStatus, nativeRequestNotifications, nativeOpenNotificationSettings, nativeOpenExactAlarmSettings,
+  nativeRequestBatteryExemption, nativeSetKeepAlive, nativeTest, nativeSyncReminders, nativeDrainActions,
+  nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile,
+} from "./native.js";
 
 /* ------------------------------------------------------------------ */
 /*  Design tokens (light / dark palettes, applied via CSS variables)   */
@@ -260,6 +265,8 @@ function normalizeTask(t) {
     assignee: t.assignee || "",
     recurrence: t.recurrence || null,
     completedAt: t.completedAt || null,
+    alarmMode: !!t.alarmMode,
+    clockAlarm: !!t.clockAlarm,
   };
 }
 
@@ -1229,6 +1236,103 @@ function ReminderToasts({ toasts, onDismiss, onExport }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Android (APK): definições nativas de lembretes e despertador       */
+/* ------------------------------------------------------------------ */
+function StatusRow({ ok, title, hint, actionLabel, onAction }) {
+  return (
+    <div className="flex items-start gap-3 rounded-xl p-3" style={{ background: C.surfaceSunk }}>
+      <div className="mt-0.5 flex-shrink-0" style={{ color: ok ? C.primary : C.danger }}>{ok ? <Check size={18} /> : <AlertTriangle size={18} />}</div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold" style={{ color: C.ink }}>{title}</div>
+        <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>{hint}</div>
+      </div>
+      {!ok && onAction && (
+        <button onClick={onAction} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>{actionLabel}</button>
+      )}
+    </div>
+  );
+}
+
+function NativeSettingsModal({ status, onRefresh, onClose }) {
+  const [msg, setMsg] = useState("");
+  const toggleKeepAlive = async () => {
+    await nativeSetKeepAlive(!status.keepAlive);
+    onRefresh();
+  };
+  const runTest = async (alarm) => {
+    await nativeTest(alarm);
+    setMsg(`${alarm ? "Despertador" : "Notificação"} de teste em 5 segundos. Pode até bloquear o ecrã ou sair da app.`);
+  };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }} onClick={onClose}>
+      <div className="w-full sm:max-w-md max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 sticky top-0" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+          <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><ShieldCheck size={17} color={C.accent} /> Lembretes e alarmes</span>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
+        </div>
+        <div className="p-5 space-y-3">
+          <p className="text-xs" style={{ color: C.inkSoft }}>
+            Para os lembretes chegarem sempre à hora certa, mesmo com o Vivaro fechado ou o ecrã bloqueado, confirme os pontos abaixo.
+          </p>
+          <StatusRow
+            ok={status.notifications} title="Notificações"
+            hint={status.notifications ? "Permitidas." : "Sem esta permissão não aparece nenhum lembrete."}
+            actionLabel="Permitir" onAction={async () => { await nativeRequestNotifications(); setTimeout(async () => { const st = await nativeStatus(); if (!st.notifications) await nativeOpenNotificationSettings(); onRefresh(); }, 1500); }}
+          />
+          <StatusRow
+            ok={status.exactAlarms} title="Alarmes e lembretes exatos"
+            hint={status.exactAlarms ? "Permitidos: os avisos disparam à hora marcada." : "Sem isto o Android pode atrasar os avisos alguns minutos."}
+            actionLabel="Permitir" onAction={async () => { await nativeOpenExactAlarmSettings(); }}
+          />
+          <StatusRow
+            ok={status.batteryExempt} title="Sem restrições de bateria"
+            hint={status.batteryExempt ? "O Android não vai parar o Vivaro para poupar bateria." : "Recomendado: evita que o Android pare o Vivaro em segundo plano."}
+            actionLabel="Permitir" onAction={async () => { await nativeRequestBatteryExemption(); }}
+          />
+          <div className="flex items-start gap-3 rounded-xl p-3" style={{ background: C.surfaceSunk }}>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold" style={{ color: C.ink }}>Manter o Vivaro ativo em segundo plano</div>
+              <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>Mostra uma notificação discreta permanente e ajuda a entregar os lembretes.</div>
+            </div>
+            <button onClick={toggleKeepAlive} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0" style={{ background: status.keepAlive ? C.primary : C.border, color: status.keepAlive ? "#fff" : C.ink }}>
+              {status.keepAlive ? "Ligado" : "Desligado"}
+            </button>
+          </div>
+
+          <div className="pt-1">
+            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: C.inkSoft }}>Testar</div>
+            <div className="flex gap-2">
+              <button onClick={() => runTest(false)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.primarySoft, color: C.primary }}>Notificação</button>
+              <button onClick={() => runTest(true)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.accentSoft, color: C.accent }}>Despertador</button>
+            </div>
+            {msg && <div className="text-xs mt-2" style={{ color: C.inkSoft }}>{msg}</div>}
+          </div>
+
+          <p className="text-xs pt-1" style={{ color: C.inkSoft }}>
+            Nas notificações pode tocar em <b>Adiar 10 min</b>, <b>Adiar 1 h</b> ou <b>Concluir</b> sem abrir a app.
+            Em cada tarefa pode ainda ativar a opção <b>Despertador</b>.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NativeSetupBanner({ status, onOpen }) {
+  const missing = !status.notifications || !status.exactAlarms || !status.batteryExempt;
+  if (!missing) return null;
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-3">
+      <div className="flex items-center gap-3 rounded-2xl px-4 py-3" style={{ background: C.accentSoft, border: `1px solid ${C.accent}` }}>
+        <BellRing size={18} color={C.accent} className="flex-shrink-0" />
+        <div className="flex-1 text-sm" style={{ color: C.ink }}>Falta ativar permissões para os lembretes funcionarem sempre à hora certa.</div>
+        <button onClick={onOpen} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>Configurar</button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Theme toggle switch                                                */
 /* ------------------------------------------------------------------ */
 function ThemeToggle({ theme, onToggle }) {
@@ -1254,9 +1358,23 @@ function ThemeToggle({ theme, onToggle }) {
 /* ------------------------------------------------------------------ */
 /*  Voice capture button                                               */
 /* ------------------------------------------------------------------ */
+// Voz no APK Android: usa o reconhecimento de voz nativo (o WebView não tem Web Speech API)
+async function listenNative(onText, setListening) {
+  setListening(true);
+  try {
+    const text = await nativeListen("pt-BR");
+    if (text) onText(text);
+  } catch (e) {
+    alert((e && e.message) || "Não foi possível usar o microfone.");
+  } finally {
+    setListening(false);
+  }
+}
+
 function VoiceCaptureButton({ onResult }) {
   const [listening, setListening] = useState(false);
   const start = () => {
+    if (isNative) { listenNative(onResult, setListening); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome."); return; }
     const rec = new SR();
@@ -1284,6 +1402,7 @@ function VoiceCaptureButton({ onResult }) {
 function DictateFieldButton({ onText, title = "Ditar por voz" }) {
   const [listening, setListening] = useState(false);
   const start = () => {
+    if (isNative) { listenNative(onText, setListening); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome."); return; }
     const rec = new SR();
@@ -1314,7 +1433,7 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
   const blank = {
     id: null, title: "", description: "", category: "pessoal",
     quadrant: 2, status: "pendente", dueDate: "", dueTime: "",
-    reminders: [], attachments: [], subtasks: [], assignee: "", watchers: [], comments: [], recurrence: null,
+    reminders: [], attachments: [], subtasks: [], assignee: "", watchers: [], comments: [], recurrence: null, alarmMode: false, clockAlarm: false,
   };
   const [form, setForm] = useState(() => {
     if (!initial) return { ...blank, ...(voicePrefill || {}) };
@@ -1352,6 +1471,8 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
       watchers: form.watchers,
       comments: form.comments,
       recurrence: form.recurrence,
+      alarmMode: !!form.alarmMode,
+      clockAlarm: !!form.clockAlarm,
       completedAt: form.status === "concluido" ? (form.completedAt || new Date().toISOString()) : null,
       createdAt: form.createdAt || new Date().toISOString(),
     });
@@ -1442,6 +1563,20 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
               ))}
             </div>
           </div>
+
+          {isNative && (
+            <div className="rounded-xl p-3 space-y-2" style={{ background: C.surfaceSunk }}>
+              <div className="text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5" style={{ color: C.inkSoft }}><AlarmClock size={13} /> Despertador</div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: C.ink }}>
+                <input type="checkbox" className="mt-0.5" checked={!!form.alarmMode} onChange={(e) => update("alarmMode", e.target.checked)} />
+                <span>Tocar como despertador (som de alarme, repete até dispensar) nos lembretes e no prazo desta tarefa</span>
+              </label>
+              <label className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: C.ink }}>
+                <input type="checkbox" className="mt-0.5" checked={!!form.clockAlarm} onChange={(e) => update("clockAlarm", e.target.checked)} />
+                <span>Criar também um alarme na app Relógio do telemóvel à hora do prazo <span style={{ color: C.inkSoft }}>(só quando faltarem menos de 24 h e com o Vivaro aberto)</span></span>
+              </label>
+            </div>
+          )}
 
           <div>
             <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Subtarefas</label>
@@ -1753,7 +1888,14 @@ function BackupView({ tasks, onImport }) {
   const [msg, setMsg] = useState("");
 
   const exportBackup = () => {
-    const blob = new Blob([JSON.stringify({ app: "Vivaro", version: 2, exportedAt: new Date().toISOString(), tasks }, null, 2)], { type: "application/json" });
+    const json = JSON.stringify({ app: "Vivaro", version: 2, exportedAt: new Date().toISOString(), tasks }, null, 2);
+    if (isNative) {
+      nativeShareFile(`vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`, { text: json })
+        .then(() => setMsg("Backup pronto: escolha onde guardar (Drive, Ficheiros, e-mail…)."))
+        .catch(() => setMsg("Não foi possível exportar o backup."));
+      return;
+    }
+    const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
@@ -1820,6 +1962,9 @@ export default function App() {
   const [noteViewer, setNoteViewer] = useState(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
+  const [showNativeSettings, setShowNativeSettings] = useState(false);
+  const [nativeInfo, setNativeInfo] = useState({ notifications: true, exactAlarms: true, batteryExempt: true, keepAlive: false, sdk: 0 });
+  const [flash, setFlash] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installVariant, setInstallVariant] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(true);
@@ -1899,6 +2044,7 @@ export default function App() {
   // closing it fully stops delivery. Installing Vivaro on the phone's home screen
   // (see the "Instalar app" banner) makes this behave much more like a real app.
   const fireNotification = useCallback((title, options) => {
+    if (isNative) return; // no APK os avisos são entregues pelo código nativo (alarmes exatos)
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
     // Prefer firing through the installed service worker: on Android this is what
     // makes the alert show up as a proper system notification even when the PWA
@@ -1998,7 +2144,10 @@ export default function App() {
 
   const openAttachment = useCallback((att) => {
     if (att.kind === "image") { setLightbox(att.dataUrl); return; }
-    if (att.kind === "file") { window.open(att.dataUrl, "_blank"); return; }
+    if (att.kind === "file") {
+      if (isNative) { nativeShareFile(att.name || "documento", { dataUrl: att.dataUrl }).catch(() => {}); return; }
+      window.open(att.dataUrl, "_blank"); return;
+    }
     if (att.kind === "link") { window.open(/^https?:\/\//i.test(att.url) ? att.url : `https://${att.url}`, "_blank"); return; }
     if (att.kind === "note") { setNoteViewer(att); return; }
     if (att.kind === "location") {
@@ -2012,6 +2161,104 @@ export default function App() {
     setVoicePrefill(parsed);
     setModalTask(null);
   }, []);
+
+  /* ---------------- Android nativo: estado, sincronização e ações das notificações ---------------- */
+  const refreshNative = useCallback(async () => {
+    if (!isNative) return;
+    setNativeInfo(await nativeStatus());
+  }, []);
+
+  // Arranque: pede permissão de notificações na 1.ª vez e mantém o serviço em segundo plano ligado
+  useEffect(() => {
+    if (!isNative) return;
+    (async () => {
+      let first = false;
+      try { first = !localStorage.getItem("vivaro:nativeInit"); if (first) localStorage.setItem("vivaro:nativeInit", "1"); } catch (e) { /* ignore */ }
+      if (first) {
+        await nativeRequestNotifications();
+        await nativeSetKeepAlive(true);
+      } else {
+        const st = await nativeStatus();
+        if (st.keepAlive) await nativeSetKeepAlive(true);
+      }
+      setTimeout(refreshNative, 1200);
+    })();
+    const onVis = () => { if (document.visibilityState === "visible") refreshNative(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [refreshNative]);
+
+  // Envia ao Android a lista de lembretes sempre que as tarefas mudam
+  useEffect(() => {
+    if (!isNative || !loaded) return;
+    const now = Date.now();
+    const items = [];
+    const activeIds = [];
+    tasks.forEach((task) => {
+      if (task.status === "concluido" || task.status === "cancelado") return;
+      activeIds.push(task.id);
+      if (!task.dueAt) return;
+      const dueMs = new Date(task.dueAt).getTime();
+      const due = `Prazo ${fmtDate(task.dueAt)}${fmtTime(task.dueAt) ? ` · ${fmtTime(task.dueAt)}` : ""}`.trim();
+      const alarm = !!task.alarmMode;
+      (task.reminders || []).forEach((r) => {
+        const at = dueMs - (r.value || 0) * (REMINDER_MS[r.unit] || REMINDER_MS.hours);
+        if (at > now) items.push({ key: `${task.id}:${r.id}`, taskId: task.id, title: `${alarm ? "⏰ " : "Lembrete: "}${task.title}`, body: due, at, alarm });
+      });
+      if (alarm && dueMs > now) {
+        items.push({ key: `${task.id}:due`, taskId: task.id, title: `⏰ ${task.title}`, body: due, at: dueMs, alarm: true });
+      }
+    });
+    items.sort((a, b) => a.at - b.at);
+    nativeSyncReminders(items.slice(0, 400), activeIds);
+  }, [tasks, loaded]);
+
+  // Botão "Concluir" da notificação (e outras ações guardadas enquanto a app estava fechada)
+  const drainNativeActions = useCallback(async () => {
+    const actions = await nativeDrainActions();
+    actions.forEach((a) => { if (a && a.type === "done" && a.taskId) changeStatus(a.taskId, "concluido"); });
+  }, [changeStatus]);
+
+  useEffect(() => {
+    if (!isNative || !loaded) return;
+    drainNativeActions();
+    const off = nativeOnAction(() => drainNativeActions());
+    const onVis = () => { if (document.visibilityState === "visible") drainNativeActions(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { off(); document.removeEventListener("visibilitychange", onVis); };
+  }, [loaded, drainNativeActions]);
+
+  // Alarmes na app Relógio: só é possível criar com o Vivaro visível e para as próximas 24 h
+  useEffect(() => {
+    if (!isNative || !loaded) return;
+    const KEY = "vivaro:clockAlarmsSet";
+    const check = async () => {
+      if (document.visibilityState !== "visible") return;
+      let done = [];
+      try { done = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { /* ignore */ }
+      const now = Date.now();
+      for (const task of tasks) {
+        if (!task.clockAlarm || !task.dueAt || task.status === "concluido" || task.status === "cancelado") continue;
+        const dueMs = new Date(task.dueAt).getTime();
+        const d = new Date(dueMs);
+        if (dueMs <= now || dueMs - now > 24 * 60 * 60 * 1000) continue;
+        if (!d.getHours() && !d.getMinutes()) continue; // sem hora definida
+        const k = `${task.id}:${task.dueAt}`;
+        if (done.includes(k)) continue;
+        try {
+          await nativeSetClockAlarm(d.getHours(), d.getMinutes(), task.title);
+          done = [...done.slice(-200), k];
+          try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) { /* ignore */ }
+          setFlash(`Alarme criado na app Relógio às ${fmtTime(task.dueAt)}`);
+          setTimeout(() => setFlash(""), 4000);
+        } catch (e) { /* app Relógio indisponível: o despertador do Vivaro continua a valer */ }
+      }
+    };
+    check();
+    const iv = setInterval(check, 60000);
+    document.addEventListener("visibilitychange", check);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", check); };
+  }, [tasks, loaded]);
 
   const cardHandlers = { onEdit: setModalTask, onDelete: deleteTask, onStatusChange: changeStatus, onExport: exportGCal, onOpenAttachment: openAttachment };
 
@@ -2059,6 +2306,11 @@ export default function App() {
               <Bot size={16} /> <span className="hidden sm:inline">IA</span>
             </button>
             <VoiceCaptureButton onResult={handleVoiceResult} />
+            {isNative && (
+              <button onClick={() => setShowNativeSettings(true)} title="Lembretes e alarmes" className="inline-flex items-center px-2.5 py-2 rounded-xl" style={{ background: C.surfaceSunk, color: C.ink }}>
+                <Settings size={16} />
+              </button>
+            )}
             <button onClick={() => setModalTask(null)} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-semibold text-sm text-white" style={{ background: C.accent }}>
               <Plus size={16} /> <span className="hidden sm:inline">Nova tarefa</span>
             </button>
@@ -2075,13 +2327,15 @@ export default function App() {
       </div>
 
       <InstallBanner
-        variant={showInstallBanner ? installVariant : null}
+        variant={showInstallBanner && !isNative ? installVariant : null}
         onInstall={handleInstall}
         onDismiss={dismissInstallBanner}
       />
 
+      {isNative && <NativeSetupBanner status={nativeInfo} onOpen={() => setShowNativeSettings(true)} />}
+
       <NotificationBanner
-        permission={showNotifBanner ? notifPermission : "granted"}
+        permission={showNotifBanner && !isNative ? notifPermission : "granted"}
         onEnable={requestNotifPermission}
         onDismiss={() => setShowNotifBanner(false)}
       />
@@ -2101,6 +2355,10 @@ export default function App() {
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
       {noteViewer && <NoteViewer note={noteViewer} onClose={() => setNoteViewer(null)} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+      {showNativeSettings && <NativeSettingsModal status={nativeInfo} onRefresh={refreshNative} onClose={() => setShowNativeSettings(false)} />}
+      {flash && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-xl text-sm font-semibold shadow-lg" style={{ background: C.primary, color: "#fff" }}>{flash}</div>
+      )}
       {showAIChat && (
         <AIChatModal
           tasks={tasks}

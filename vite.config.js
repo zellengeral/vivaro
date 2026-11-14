@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  // Publicado em zellen.pt/vivaro (subpasta) — ajuste ou remova esta linha
-  // se um dia mudar para a raiz do domínio ou para um subdomínio.
-  base: "/vivaro/",
+  // Site web (ptisp): publicado em zellen.pt/vivaro (subpasta).
+  // APK Android: o workflow define VITE_BASE="./" para os ficheiros carregarem de dentro da app.
+  base: process.env.VITE_BASE || "/vivaro/",
   plugins: [react()],
 });
