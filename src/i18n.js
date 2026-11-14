@@ -1,3 +1,4 @@
+import { FIN_ROWS } from "./financeI18n.js";
 // Idiomas do Vivaro. As chaves são os textos originais em português.
 // Linha: [pt, en, es, de, fr, ja, zh, sv, nl, pl, ru]. Texto em falta → inglês → português.
 export const LANGS = [
@@ -298,6 +299,8 @@ const TIP_ROWS_2 = [
 ];
 
 const DICT = {};
+const DICT_SKIP = new Set(ROWS.map((r) => r[0]));
+FIN_ROWS.forEach((r) => { if (!DICT_SKIP.has(r[0])) ROWS.push(r); });
 ROWS.forEach((row) => {
   const o = {};
   ORDER.forEach((code, i) => { if (row[i]) o[code] = row[i]; });

@@ -104,3 +104,9 @@ O mesmo código gera duas versões: o site (ptisp, `npm run build`) e o APK (Git
 - Menu fixo no rodapé com scroll horizontal (Tarefas, Saúde). Para acrescentar um módulo, adicione uma linha em `MODULES` no `App.jsx`.
 - Saúde → Hidratação: botão ligar/desligar, dias da semana, início e fim dos alertas, frequência, meta diária e 3 quantidades rápidas (200/300/400 ml). No APK o próprio Android repete os lembretes (sem limite de dias) e cada notificação traz uma curiosidade diferente sobre hidratação, com botões de quantidade.
 - Definições (⚙): idioma (EN, PT, ES, DE, FR, JA, ZH, SV, NL, PL, RU). Textos em `src/i18n.js`.
+
+## v1.4.0 — Finanças
+- Novo módulo **Finanças** (menu inferior): contas, cartões (limite, fecho, vencimento), receitas/despesas/transferências, parcelamentos, recorrências, categorias e subcategorias, tetos mensais, metas (cofrinhos) e fluxo de caixa futuro. Valores em centavos.
+- Backup unificado v4 (`tasks` + `health` + `finance`), restauro por junção de ids.
+- Botão "Adicionar" da hidratação alinhado; assistente de IA mais rápido (raciocínio mínimo, modelo em cache, contexto reduzido).
+- Documentação: `FINANCAS-SQLITE.md` (+ `docs/financas-schema.sql`).

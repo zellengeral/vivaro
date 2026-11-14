@@ -6,13 +6,15 @@ import {
   Download, Upload, Briefcase, User, GripVertical,
   Mic, Repeat, FileText, Link2, StickyNote, MapPin, MessageSquare,
   Paperclip, ChevronLeft, ChevronRight, Milestone,
-  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck, HeartPulse, Droplets, Globe,
+  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck, HeartPulse, Droplets, Globe, Wallet,
 } from "lucide-react";
 import {
   isNative, nativeStatus, nativeRequestNotifications, nativeOpenNotificationSettings, nativeOpenExactAlarmSettings,
   nativeRequestBatteryExemption, nativeSetKeepAlive, nativeTest, nativeSyncReminders, nativeDrainActions,
   nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile, nativeSetWater, nativeTestWater,
 } from "./native.js";
+import FinanceView from "./Finance.jsx";
+import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance } from "./financeLogic.js";
 import { LANGS, t, setLang, detectLang, locale, voiceLang, langInfo, hydrationTips } from "./i18n.js";
 
 setLang(detectLang());
@@ -278,7 +280,10 @@ function normalizeTask(t) {
 // Monta um resumo compacto das tarefas para servir de contexto à IA
 function buildTasksContext(tasks) {
   if (!tasks.length) return "Nenhuma tarefa cadastrada.";
-  const sorted = sortByPriority(tasks);
+  // Contexto enxuto = resposta mais rápida: todas as tarefas abertas + as 10 últimas concluídas/canceladas
+  const closed = (x) => x.status === "concluido" || x.status === "cancelado";
+  const recentClosed = tasks.filter(closed).sort((a, b) => new Date(b.completedAt || b.createdAt || 0) - new Date(a.completedAt || a.createdAt || 0)).slice(0, 10);
+  const sorted = sortByPriority([...tasks.filter((x) => !closed(x)), ...recentClosed]).slice(0, 80);
   return sorted
     .map((t) => {
       const st = STATUSES.find((s) => s.id === t.status)?.label || t.status;
@@ -325,11 +330,20 @@ function buildTaskFromAI(fields, existing) {
 // Lista de modelos candidatos, do preferido ao mais antigo — se o primeiro sumir
 // (a Google renomeia modelos de tempos em tempos), o app tenta o próximo sozinho.
 const GEMINI_MODEL_CANDIDATES = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
-let workingGeminiModel = null; // cache do último modelo que funcionou nesta sessão
+// Modelo que funcionou da última vez fica guardado (evita tentar modelos que dão 404 a cada pergunta)
+let workingGeminiModel = (() => { try { return localStorage.getItem("vivaro:geminiModel") || null; } catch (e) { return null; } })();
+
+// Desliga/minimiza o "raciocínio" interno do modelo: é o que mais atrasa respostas simples (10–15 s)
+function thinkingFor(model) {
+  if (/2\.5/.test(model)) return { thinkingBudget: 0 };
+  if (/gemini-3|flash-latest/.test(model)) return { thinkingLevel: "minimal" };
+  return null;
+}
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function callGeminiOnce(prompt, model) {
+async function callGeminiOnce(prompt, model, useThinking = true) {
+  const thinking = useThinking ? thinkingFor(model) : null;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
     {
@@ -337,11 +351,12 @@ async function callGeminiOnce(prompt, model) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" },
+        generationConfig: { responseMimeType: "application/json", temperature: 0.4, maxOutputTokens: 1500, ...(thinking ? { thinkingConfig: thinking } : {}) },
       }),
     }
   );
   if (!res.ok) {
+    if (res.status === 400 && thinking) return callGeminiOnce(prompt, model, false); // modelo não aceita esta opção
     if (res.status === 429) {
       const err = new Error("Limite de pedidos do Gemini atingido no momento (pode ser o limite por minuto — geralmente libera rápido). Tente de novo em instantes; se persistir, pode ser o limite diário gratuito.");
       err.retryable = true;
@@ -432,11 +447,12 @@ PERGUNTA: ${question}`;
     try {
       raw = await callWithRetry(prompt, model);
       workingGeminiModel = model;
+      try { localStorage.setItem("vivaro:geminiModel", model); } catch (e) { /* ignore */ }
       lastErr = null;
       break;
     } catch (err) {
       lastErr = err;
-      if (err.modelNotFound) continue; // tenta o próximo candidato
+      if (err.modelNotFound) { if (model === workingGeminiModel) { workingGeminiModel = null; try { localStorage.removeItem("vivaro:geminiModel"); } catch (e) { /* ignore */ } } continue; }
       throw err; // erro real (limite, permissão, etc.) — não adianta trocar de modelo
     }
   }
@@ -1243,6 +1259,7 @@ function ReminderToasts({ toasts, onDismiss, onExport }) {
 /* ------------------------------------------------------------------ */
 const MODULES = [
   { id: "tarefas", get label() { return t("Tarefas"); }, icon: LayoutDashboard },
+  { id: "financas", get label() { return t("Finanças"); }, icon: Wallet },
   { id: "saude", get label() { return t("Saúde"); }, icon: HeartPulse },
   // Novos módulos: basta acrescentar uma linha aqui e tratar o id no App.
 ];
@@ -1391,9 +1408,9 @@ function HydrationView({ hy, onChange, onAdd, onRemove, onTest, onBack }) {
             <button key={i} onClick={() => onAdd(ml)} className="py-3 rounded-xl font-bold text-sm" style={{ background: C.primarySoft, color: C.primary }}>+{ml} ml</button>
           ))}
         </div>
-        <div className="flex gap-2 mt-3">
-          <input type="number" min={1} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder={t("Outra quantidade (ml)")} className={`${input} flex-1`} style={{ borderColor: C.border, color: C.ink }} />
-          <button onClick={() => { const ml = parseInt(custom, 10); if (ml > 0) { onAdd(Math.min(ml, 5000)); setCustom(""); } }} className="px-4 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.accent }}>{t("Adicionar")}</button>
+        <div className="flex items-stretch gap-2 mt-3">
+          <input type="number" inputMode="numeric" min={1} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder={t("Outra quantidade (ml)")} className={`${input} flex-1 min-w-0 w-0`} style={{ borderColor: C.border, color: C.ink }} />
+          <button onClick={() => { const ml = parseInt(custom, 10); if (ml > 0) { onAdd(Math.min(ml, 5000)); setCustom(""); } }} className="flex-shrink-0 inline-flex items-center justify-center gap-1 px-4 rounded-lg text-sm font-semibold text-white whitespace-nowrap" style={{ background: C.accent }}><Plus size={15} /> {t("Adicionar")}</button>
         </div>
       </div>
 
@@ -2171,12 +2188,12 @@ function TimelineView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
   );
 }
 
-function BackupView({ tasks, health, onImport, onImportHealth }) {
+function BackupView({ tasks, health, finance, onImport, onImportHealth, onImportFinance }) {
   const fileRef = useRef(null);
   const [msg, setMsg] = useState("");
 
   const exportBackup = () => {
-    const json = JSON.stringify({ app: "Vivaro", version: 3, exportedAt: new Date().toISOString(), tasks, health }, null, 2);
+    const json = JSON.stringify({ app: "Vivaro", version: 4, exportedAt: new Date().toISOString(), tasks, health, finance }, null, 2);
     if (isNative) {
       nativeShareFile(`vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`, { text: json })
         .then(() => setMsg(t("Backup pronto: escolha onde guardar (Drive, Ficheiros, e-mail…).")))
@@ -2202,6 +2219,7 @@ function BackupView({ tasks, health, onImport, onImportHealth }) {
         if (!Array.isArray(imported)) throw new Error("formato inválido");
         onImport(imported);
         if (!Array.isArray(data) && data.health && onImportHealth) onImportHealth(data.health);
+        if (!Array.isArray(data) && data.finance && onImportFinance) onImportFinance(data.finance);
         setMsg(t("{n} tarefas importadas com sucesso.", { n: imported.length }));
       } catch (err) {
         setMsg(t("Não foi possível ler o arquivo de backup. Verifique o formato."));
@@ -2257,6 +2275,9 @@ export default function App() {
   const [lang, setLangState] = useState(() => detectLang());
   const [moduleId, setModuleId] = useState("tarefas");
   const [health, setHealth] = useState(loadHealth);
+  const [finance, setFinance] = useState(() => {
+    try { return normalizeFinance(JSON.parse(localStorage.getItem(FIN_KEY) || "null")); } catch (e) { return emptyFinance(); }
+  });
   const [waterPrompt, setWaterPrompt] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installVariant, setInstallVariant] = useState(null);
@@ -2459,6 +2480,13 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(HEALTH_KEY, JSON.stringify(health)); } catch (e) { /* ignore */ }
   }, [health]);
+
+  /* ---------------- Finanças ---------------- */
+  useEffect(() => {
+    try { localStorage.setItem(FIN_KEY, JSON.stringify(finance)); } catch (e) { /* ignore */ }
+  }, [finance]);
+  const importFinance = useCallback((incoming) => setFinance((f) => mergeFinance(f, incoming)), []);
+  const addTaskDirect = useCallback((task) => setTasks((prev) => [task, ...prev]), []);
 
   const updateHydration = useCallback((patch) => setHealth((h) => ({ ...h, hydration: { ...h.hydration, ...patch } })), []);
   const addWater = useCallback((ml, atIso, silent) => {
@@ -2710,13 +2738,14 @@ export default function App() {
       />
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
+        {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
         {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "calendario" && <CalendarView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "timeline" && <TimelineView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {moduleId === "tarefas" && view === "backup" && <BackupView tasks={tasks} health={health} onImport={importTasks} onImportHealth={importHealth} />}
+        {moduleId === "tarefas" && view === "backup" && <BackupView tasks={tasks} health={health} finance={finance} onImport={importTasks} onImportHealth={importHealth} onImportFinance={importFinance} />}
       </div>
 
       {modalTask !== undefined && (
