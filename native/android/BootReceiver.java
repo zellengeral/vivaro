@@ -14,6 +14,7 @@ public class BootReceiver extends BroadcastReceiver {
         try {
             VivaroCore.ensureChannels(c);
             VivaroCore.rescheduleAll(c);
+            VivaroCore.scheduleNextWater(c);
             if (VivaroCore.prefs(c).getBoolean("keepAlive", false)) VivaroCore.startKeepAlive(c);
         } catch (Exception ignored) {
         }

@@ -21,6 +21,8 @@ export const nativeOpenNotificationSettings = () => safe(() => VivaroNative.open
 export const nativeOpenExactAlarmSettings = () => safe(() => VivaroNative.openExactAlarmSettings(), null);
 export const nativeRequestBatteryExemption = () => safe(() => VivaroNative.requestBatteryExemption(), null);
 export const nativeSetKeepAlive = (enabled) => safe(() => VivaroNative.setKeepAlive({ enabled: !!enabled }), null);
+export const nativeSetWater = (cfg) => safe(() => VivaroNative.setWaterSchedule(cfg), null);
+export const nativeTestWater = () => safe(() => VivaroNative.testWater(), null);
 export const nativeTest = (alarm) => safe(() => VivaroNative.testNotification({ alarm: !!alarm }), null);
 
 // items: [{ key, taskId, title, body, at (ms), alarm }]  ·  activeTaskIds: ids das tarefas ainda abertas

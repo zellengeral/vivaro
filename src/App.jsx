@@ -6,13 +6,16 @@ import {
   Download, Upload, Briefcase, User, GripVertical,
   Mic, Repeat, FileText, Link2, StickyNote, MapPin, MessageSquare,
   Paperclip, ChevronLeft, ChevronRight, Milestone,
-  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck,
+  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck, HeartPulse, Droplets, Globe,
 } from "lucide-react";
 import {
   isNative, nativeStatus, nativeRequestNotifications, nativeOpenNotificationSettings, nativeOpenExactAlarmSettings,
   nativeRequestBatteryExemption, nativeSetKeepAlive, nativeTest, nativeSyncReminders, nativeDrainActions,
-  nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile,
+  nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile, nativeSetWater, nativeTestWater,
 } from "./native.js";
+import { LANGS, t, setLang, detectLang, locale, voiceLang, langInfo, hydrationTips } from "./i18n.js";
+
+setLang(detectLang());
 
 /* ------------------------------------------------------------------ */
 /*  Design tokens (light / dark palettes, applied via CSS variables)   */
@@ -98,39 +101,41 @@ const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 // Modelo do Gemini: ver GEMINI_MODEL_CANDIDATES mais abaixo (lista com fallback automático)
 
 const QUADRANTS = [
-  { id: 1, label: "Fazer agora", sub: "Urgente + Importante", color: C.q1, soft: C.q1Soft },
-  { id: 2, label: "Planejar", sub: "Importante, não urgente", color: C.q2, soft: C.q2Soft },
-  { id: 3, label: "Delegar", sub: "Urgente, não importante", color: C.q3, soft: C.q3Soft },
-  { id: 4, label: "Eliminar", sub: "Nem urgente, nem importante", color: C.q4, soft: C.q4Soft },
+  { id: 1, get label() { return t("Fazer agora"); }, get sub() { return t("Urgente + Importante"); }, color: C.q1, soft: C.q1Soft },
+  { id: 2, get label() { return t("Planejar"); }, get sub() { return t("Importante, não urgente"); }, color: C.q2, soft: C.q2Soft },
+  { id: 3, get label() { return t("Delegar"); }, get sub() { return t("Urgente, não importante"); }, color: C.q3, soft: C.q3Soft },
+  { id: 4, get label() { return t("Eliminar"); }, get sub() { return t("Nem urgente, nem importante"); }, color: C.q4, soft: C.q4Soft },
 ];
 
 const STATUSES = [
-  { id: "pendente", label: "Pendente", color: "#8B93A7" },
-  { id: "em_andamento", label: "Em andamento", color: "#2E86DE" },
-  { id: "aguarda_tratamento", label: "Aguarda tratamento", color: "#DDA22A" },
-  { id: "cancelado", label: "Cancelado", color: "#9A9A9A" },
-  { id: "concluido", label: "Concluído", color: "#0F6E5E" },
+  { id: "pendente", get label() { return t("Pendente"); }, color: "#8B93A7" },
+  { id: "em_andamento", get label() { return t("Em andamento"); }, color: "#2E86DE" },
+  { id: "aguarda_tratamento", get label() { return t("Aguarda tratamento"); }, color: "#DDA22A" },
+  { id: "cancelado", get label() { return t("Cancelado"); }, color: "#9A9A9A" },
+  { id: "concluido", get label() { return t("Concluído"); }, color: "#0F6E5E" },
 ];
 
 const REMINDER_UNITS = [
-  { id: "minutes", label: "minutos" },
-  { id: "hours", label: "horas" },
-  { id: "days", label: "dias" },
+  { id: "minutes", get label() { return t("minutos"); } },
+  { id: "hours", get label() { return t("horas"); } },
+  { id: "days", get label() { return t("dias"); } },
 ];
 
 const RECURRENCE_OPTIONS = [
-  { id: "", label: "Não repete" },
-  { id: "daily", label: "Todos os dias" },
-  { id: "weekday", label: "Todo dia útil" },
-  { id: "weekly", label: "Semanalmente" },
-  { id: "interval", label: "A cada X dias" },
-  { id: "monthly_day", label: "Mensalmente (mesmo dia)" },
-  { id: "monthly_last_business", label: "Último dia útil do mês" },
-  { id: "monthly_first", label: "Primeiro dia de cada mês" },
-  { id: "after_completion", label: "A cada X dias após concluir" },
+  { id: "", get label() { return t("Não repete"); } },
+  { id: "daily", get label() { return t("Todos os dias"); } },
+  { id: "weekday", get label() { return t("Todo dia útil"); } },
+  { id: "weekly", get label() { return t("Semanalmente"); } },
+  { id: "interval", get label() { return t("A cada X dias"); } },
+  { id: "monthly_day", get label() { return t("Mensalmente (mesmo dia)"); } },
+  { id: "monthly_last_business", get label() { return t("Último dia útil do mês"); } },
+  { id: "monthly_first", get label() { return t("Primeiro dia de cada mês"); } },
+  { id: "after_completion", get label() { return t("A cada X dias após concluir"); } },
 ];
 
-const WEEKDAY_LABELS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+// 2024-01-07 foi um domingo: usamos o Intl para obter os dias da semana no idioma atual
+const weekdayShort = () => Array.from({ length: 7 }, (_, i) => new Date(2024, 0, 7 + i).toLocaleDateString(locale(), { weekday: "short" }));
+const weekdayNarrow = () => Array.from({ length: 7 }, (_, i) => new Date(2024, 0, 7 + i).toLocaleDateString(locale(), { weekday: "narrow" }));
 
 const STORAGE_KEY = "vivaro:tasks:v2";
 // Caminho base onde o app está publicado (definido em vite.config.js). Usar isso
@@ -148,14 +153,14 @@ function uid() {
 function fmtDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+  return d.toLocaleDateString(locale(), { day: "2-digit", month: "short" });
 }
 
 function fmtTime(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (d.getHours() === 0 && d.getMinutes() === 0) return null;
-  return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 }
 
 function isOverdue(task) {
@@ -242,10 +247,10 @@ function computeNextOccurrence(task) {
 function recurrenceLabel(rec) {
   if (!rec) return "";
   if (rec.type === "weekly" && rec.weekDays?.length) {
-    return `Toda(s) ${rec.weekDays.map((d) => WEEKDAY_LABELS[d]).join(", ")}`;
+    return t("Toda(s) {days}", { days: rec.weekDays.map((d) => weekdayShort()[d]).join(", ") });
   }
-  if (rec.type === "interval") return `A cada ${rec.intervalDays || 1} dias`;
-  if (rec.type === "after_completion") return `${rec.intervalDays || 1}d após concluir`;
+  if (rec.type === "interval") return t("A cada {n} dias", { n: rec.intervalDays || 1 });
+  if (rec.type === "after_completion") return t("{n}d após concluir", { n: rec.intervalDays || 1 });
   const opt = RECURRENCE_OPTIONS.find((o) => o.id === rec.type);
   return opt?.label || "Repete";
 }
@@ -384,7 +389,9 @@ async function askGemini(question, tasks) {
   if (!GEMINI_API_KEY) {
     throw new Error("A chave da API do Gemini ainda não foi configurada nesta implantação.");
   }
-  const prompt = `Você é o assistente pessoal do app Vivaro, um app de gerenciamento de tarefas. Você ajuda o usuário tanto respondendo perguntas quanto gerenciando as tarefas dele diretamente (criando, editando, concluindo ou excluindo). A data e hora atuais são ${new Date().toLocaleString("pt-BR")}.
+  const prompt = `IDIOMA DE RESPOSTA: responda SEMPRE em ${langInfo().ai} (o campo "reply"), mesmo que a pergunta venha em outro idioma. Os nomes das chaves do JSON e os valores técnicos (ids, status, datas ISO) permanecem exatamente como especificado abaixo.
+
+Você é o assistente pessoal do app Vivaro, um app de gerenciamento de tarefas. Você ajuda o usuário tanto respondendo perguntas quanto gerenciando as tarefas dele diretamente (criando, editando, concluindo ou excluindo). A data e hora atuais são ${new Date().toLocaleString(locale())}.
 
 REGRA MAIS IMPORTANTE SOBRE CONHECIMENTO: a lista de tarefas abaixo existe só para você saber QUAIS tarefas o usuário tem (títulos, prazos, ids) — ela NUNCA deve limitar o conteúdo da sua resposta. Se o usuário pedir ajuda para resolver, executar ou entender como fazer algo (ex.: "como resolvo isso", "como consigo X", "me ajuda com Y", mesmo mencionando o nome de uma tarefa), responda com informação real e útil sobre o assunto, usando todo o seu conhecimento geral, exatamente como faria em qualquer conversa livre — a tarefa é apenas o motivo da pergunta, não uma cerca ao redor da resposta. NUNCA responda algo como "com base apenas nas informações da tarefa, não é possível..." — isso está proibido. Só admita não saber se for algo verdadeiramente impossível de responder com conhecimento geral (ex.: um dado privado que só existiria na cabeça do usuário).
 
@@ -576,7 +583,7 @@ function EisenhowerWidget({ tasks, activeQuadrant, onSelect }) {
           style={{ background: q.soft, borderColor: activeQuadrant === q.id ? q.color : "transparent" }}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wide" style={{ color: q.color }}>Q{q.id}</span>
+            <span className="text-xs font-bold uppercase tracking-wide" style={{ color: q.color }}>{t("Q")}{q.id}</span>
             <span className="font-mono text-lg font-bold" style={{ color: q.color, fontFamily: "'IBM Plex Mono', monospace" }}>{counts[q.id]}</span>
           </div>
           <div className="text-sm font-semibold mt-0.5" style={{ color: C.ink }}>{q.label}</div>
@@ -606,7 +613,7 @@ function NoteViewer({ note, onClose }) {
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: "rgba(28,31,36,0.5)" }} onClick={onClose}>
       <div className="max-w-sm w-full rounded-2xl p-5" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-2">
-          <span className="font-bold inline-flex items-center gap-1.5" style={{ color: C.ink }}><StickyNote size={16} /> Nota</span>
+          <span className="font-bold inline-flex items-center gap-1.5" style={{ color: C.ink }}><StickyNote size={16} /> {t("Nota")}</span>
           <button onClick={onClose}><X size={18} color={C.inkSoft} /></button>
         </div>
         <p className="text-sm whitespace-pre-wrap" style={{ color: C.ink }}>{note.text}</p>
@@ -620,39 +627,37 @@ function NoteViewer({ note, onClose }) {
 /* ------------------------------------------------------------------ */
 function AboutModal({ onClose }) {
   const FEATURES = [
-    { icon: LayoutDashboard, text: "Dashboard com matriz de Eisenhower e filtros por categoria, estado, prioridade e atraso" },
-    { icon: Columns3, text: "Visões de Kanban, Lista, Calendário e Timeline para a mesma base de tarefas" },
-    { icon: Repeat, text: "Recorrência inteligente: dias úteis, semanal, mensal e a cada X dias após concluir" },
-    { icon: Check, text: "Subtarefas com progresso, responsável, observadores e comentários" },
-    { icon: Paperclip, text: "Anexos de foto, imagem, PDF/documento, link, nota e localização" },
-    { icon: Mic, text: "Criação e ditado de tarefas por voz" },
-    { icon: CalendarPlus, text: "Exportação de tarefas para o Google Agenda" },
-    { icon: DatabaseBackup, text: "Backup local em .json para exportar e restaurar suas tarefas" },
+    { icon: LayoutDashboard, get text() { return t("Dashboard com matriz de Eisenhower e filtros por categoria, estado, prioridade e atraso"); } },
+    { icon: Columns3, get text() { return t("Visões de Kanban, Lista, Calendário e Timeline para a mesma base de tarefas"); } },
+    { icon: Repeat, get text() { return t("Recorrência inteligente: dias úteis, semanal, mensal e a cada X dias após concluir"); } },
+    { icon: Check, get text() { return t("Subtarefas com progresso, responsável, observadores e comentários"); } },
+    { icon: Paperclip, get text() { return t("Anexos de foto, imagem, PDF/documento, link, nota e localização"); } },
+    { icon: Mic, get text() { return t("Criação e ditado de tarefas por voz"); } },
+    { icon: CalendarPlus, get text() { return t("Exportação de tarefas para o Google Agenda"); } },
+    { icon: DatabaseBackup, get text() { return t("Backup local em .json para exportar e restaurar suas tarefas"); } },
   ];
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }} onClick={onClose}>
       <div className="w-full sm:max-w-md max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 sticky top-0" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-          <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><Sparkles size={17} color={C.accent} /> Sobre o Vivaro</span>
+          <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><Sparkles size={17} color={C.accent} /> {t("Sobre o Vivaro")}</span>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
         </div>
 
         <div className="p-5 space-y-5">
           <div className="flex items-center gap-3">
-            <img src={`${BASE}logo.png`} alt="Vivaro" className="w-14 h-14 rounded-2xl object-contain" style={{ background: C.surfaceSunk }} />
+            <img src={`${BASE}logo.png`} alt={t("Vivaro")} className="w-14 h-14 rounded-2xl object-contain" style={{ background: C.surfaceSunk }} />
             <div>
-              <div className="font-bold text-base" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>Vivaro</div>
-              <div className="text-xs" style={{ color: C.inkSoft }}>Gerenciamento, controle e finalização de tarefas</div>
+              <div className="font-bold text-base" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{t("Vivaro")}</div>
+              <div className="text-xs" style={{ color: C.inkSoft }}>{t("Gerenciamento, controle e finalização de tarefas")}</div>
             </div>
           </div>
 
           <p className="text-sm leading-relaxed" style={{ color: C.inkSoft }}>
-            O Vivaro organiza suas tarefas pessoais e profissionais em um só lugar, priorizando pelo que realmente importa
-            com a matriz de Eisenhower e acompanhando a execução em Kanban, Lista, Calendário ou Timeline.
-          </p>
+            {t("O Vivaro organiza suas tarefas pessoais e profissionais em um só lugar, priorizando pelo que realmente importa com a matriz de Eisenhower e acompanhando a execução em Kanban, Lista, Calendário ou Timeline.")}</p>
 
           <div>
-            <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>Principais recursos</div>
+            <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>{t("Principais recursos")}</div>
             <div className="space-y-2">
               {FEATURES.map((f, i) => (
                 <div key={i} className="flex items-start gap-2.5">
@@ -667,8 +672,8 @@ function AboutModal({ onClose }) {
         </div>
 
         <div className="px-5 py-4 text-center" style={{ borderTop: `1px solid ${C.border}` }}>
-          <div className="text-xs" style={{ color: C.inkSoft }}>Vivaro</div>
-          <div className="text-sm font-semibold mt-0.5" style={{ color: C.ink }}>Autor: Jonas Rios</div>
+          <div className="text-xs" style={{ color: C.inkSoft }}>{t("Vivaro")}</div>
+          <div className="text-sm font-semibold mt-0.5" style={{ color: C.ink }}>{t("Autor: Jonas Rios")}</div>
         </div>
       </div>
     </div>
@@ -679,7 +684,7 @@ function AboutModal({ onClose }) {
 /*  AI chat — pergunte sobre suas tarefas (Gemini API)                 */
 /* ------------------------------------------------------------------ */
 const AI_CHAT_HISTORY_KEY = "vivaro:aiChatHistory";
-const AI_GREETING = { role: "ai", text: "Olá! Pergunte sobre suas tarefas, peça ajuda pra resolver alguma delas, ou peça pra eu criar, alterar, concluir ou excluir tarefas por você." };
+const AI_GREETING = { role: "ai", get text() { return t("Olá! Pergunte sobre suas tarefas, peça ajuda pra resolver alguma delas, ou peça pra eu criar, alterar, concluir ou excluir tarefas por você."); } };
 
 function AIChatModal({ tasks, onCreateTask, onUpdateTask, onCompleteTask, onDeleteTask, onClose }) {
   const [messages, setMessages] = useState(() => {
@@ -759,7 +764,7 @@ function AIChatModal({ tasks, onCreateTask, onUpdateTask, onCompleteTask, onDele
         ...prev,
         { id: uid(), role: "ai", text: reply },
         ...confirmations.map((text) => ({ id: uid(), role: "system", text })),
-        ...(parseFailed ? [{ id: uid(), role: "system", text: "⚠️ A resposta veio num formato inesperado — se você pediu pra criar/alterar/excluir algo, tente reformular a pergunta." }] : []),
+        ...(parseFailed ? [{ id: uid(), role: "system", get text() { return t("⚠️ A resposta veio num formato inesperado — se você pediu pra criar/alterar/excluir algo, tente reformular a pergunta."); } }] : []),
       ]);
     } catch (err) {
       setMessages((prev) => [...prev, { id: uid(), role: "ai", text: `⚠️ ${err.message}` }]);
@@ -773,10 +778,9 @@ function AIChatModal({ tasks, onCreateTask, onUpdateTask, onCompleteTask, onDele
       <div className="w-full sm:max-w-lg h-[85vh] sm:h-[70vh] flex flex-col rounded-t-2xl sm:rounded-2xl overflow-hidden" style={{ background: C.surface }}>
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${C.border}` }}>
           <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>
-            <Bot size={18} color={C.primary} /> Assistente
-          </span>
+            <Bot size={18} color={C.primary} /> {t("Assistente")}</span>
           <div className="flex items-center gap-1">
-            <button onClick={clearChat} title="Limpar conversa" className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><Trash2 size={17} /></button>
+            <button onClick={clearChat} title={t("Limpar conversa")} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><Trash2 size={17} /></button>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
           </div>
         </div>
@@ -803,7 +807,7 @@ function AIChatModal({ tasks, onCreateTask, onUpdateTask, onCompleteTask, onDele
           )}
           {loading && (
             <div className="flex justify-start">
-              <div className="rounded-2xl px-3.5 py-2.5 text-sm" style={{ background: C.surfaceSunk, color: C.inkSoft }}>Pensando...</div>
+              <div className="rounded-2xl px-3.5 py-2.5 text-sm" style={{ background: C.surfaceSunk, color: C.inkSoft }}>{t("Pensando...")}</div>
             </div>
           )}
         </div>
@@ -813,11 +817,11 @@ function AIChatModal({ tasks, onCreateTask, onUpdateTask, onCompleteTask, onDele
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); send(); } }}
-            placeholder="Ex: o que tenho pra fazer essa semana?"
+            placeholder={t("Ex: o que tenho pra fazer essa semana?")}
             className="flex-1 px-3 py-2.5 rounded-xl outline-none border text-sm"
             style={{ borderColor: C.border, color: C.ink }}
           />
-          <DictateFieldButton title="Perguntar por voz" onText={(t) => setInput((prev) => (prev ? `${prev} ${t}` : t))} />
+          <DictateFieldButton title={t("Perguntar por voz")} onText={(t) => setInput((prev) => (prev ? `${prev} ${t}` : t))} />
           <button onClick={send} disabled={!input.trim() || loading} className="p-2.5 rounded-xl text-white disabled:opacity-40" style={{ background: C.primary }}>
             <Send size={16} />
           </button>
@@ -853,12 +857,12 @@ function TaskCard({ task, onEdit, onDelete, onStatusChange, onExport, onOpenAtta
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge color={catColor} soft={catSoft}>{task.category === "pessoal" ? "Pessoal" : "Profissional"}</Badge>
+          <Badge color={catColor} soft={catSoft}>{task.category === "pessoal" ? t("Pessoal") : t("Profissional")}</Badge>
           <Badge color={q.color} soft={q.soft}>{q.label}</Badge>
           {task.recurrence && (
             <Badge color={C.primary} soft={C.primarySoft}><Repeat size={11} style={{ marginRight: 3 }} />{recurrenceLabel(task.recurrence)}</Badge>
           )}
-          {overdue && <Badge color={C.danger} soft={C.dangerSoft}><AlertTriangle size={11} style={{ marginRight: 3 }} /> Atrasada</Badge>}
+          {overdue && <Badge color={C.danger} soft={C.dangerSoft}><AlertTriangle size={11} style={{ marginRight: 3 }} /> {t("Atrasada")}</Badge>}
         </div>
         {draggable && <GripVertical size={14} color={C.inkSoft} />}
       </div>
@@ -885,7 +889,7 @@ function TaskCard({ task, onEdit, onDelete, onStatusChange, onExport, onOpenAtta
 
       {subtasks.length > 0 && (
         <div className="mt-2.5">
-          <div className="text-[11px] font-semibold mb-1" style={{ color: C.inkSoft }}>{doneCount}/{subtasks.length} concluídas · {pct}%</div>
+          <div className="text-[11px] font-semibold mb-1" style={{ color: C.inkSoft }}>{doneCount}/{subtasks.length} {t("concluídas ·")} {pct}%</div>
           <div className="h-1.5 rounded-full w-full" style={{ background: C.surfaceSunk }}>
             <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: C.primary }} />
           </div>
@@ -915,9 +919,9 @@ function TaskCard({ task, onEdit, onDelete, onStatusChange, onExport, onOpenAtta
           {STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
         <div className="flex items-center gap-1">
-          <button title="Exportar para Google Agenda" onClick={() => onExport(task)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.primary }}><CalendarPlus size={15} /></button>
-          <button title="Editar" onClick={() => onEdit(task)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.inkSoft }}><Pencil size={14} /></button>
-          <button title="Excluir" onClick={() => onDelete(task.id)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.danger }}><Trash2 size={14} /></button>
+          <button title={t("Exportar para Google Agenda")} onClick={() => onExport(task)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.primary }}><CalendarPlus size={15} /></button>
+          <button title={t("Editar")} onClick={() => onEdit(task)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.inkSoft }}><Pencil size={14} /></button>
+          <button title={t("Excluir")} onClick={() => onDelete(task.id)} className="p-1.5 rounded-lg hover:opacity-70" style={{ color: C.danger }}><Trash2 size={14} /></button>
         </div>
       </div>
     </div>
@@ -971,7 +975,7 @@ function SubtaskEditor({ subtasks, onChange }) {
     <div>
       {subtasks.length > 0 && (
         <div className="text-xs font-semibold mb-2" style={{ color: C.inkSoft }}>
-          {done}/{subtasks.length} concluídas · {Math.round((done / subtasks.length) * 100)}%
+          {done}/{subtasks.length} {t("concluídas ·")} {Math.round((done / subtasks.length) * 100)}%
         </div>
       )}
       <div className="space-y-1.5">
@@ -988,7 +992,7 @@ function SubtaskEditor({ subtasks, onChange }) {
             <input
               value={s.title}
               onChange={(e) => update(s.id, { title: e.target.value })}
-              placeholder="Subtarefa..."
+              placeholder={t("Subtarefa...")}
               className="flex-1 px-2 py-1.5 rounded-lg border text-sm outline-none"
               style={{ borderColor: C.border, textDecoration: s.done ? "line-through" : "none", color: s.done ? C.inkSoft : C.ink }}
             />
@@ -997,8 +1001,7 @@ function SubtaskEditor({ subtasks, onChange }) {
         ))}
       </div>
       <button type="button" onClick={add} className="text-xs font-semibold inline-flex items-center gap-1 mt-2" style={{ color: C.primary }}>
-        <Plus size={13} /> Adicionar subtarefa
-      </button>
+        <Plus size={13} /> {t("Adicionar subtarefa")}</button>
     </div>
   );
 }
@@ -1021,7 +1024,7 @@ function RecurrenceEditor({ recurrence, onChange }) {
       </select>
       {type === "weekly" && (
         <div className="flex gap-1.5 mt-2 flex-wrap">
-          {WEEKDAY_LABELS.map((lbl, idx) => (
+          {weekdayShort().map((lbl, idx) => (
             <button
               type="button" key={idx} onClick={() => toggleWeekDay(idx)}
               className="w-9 h-9 rounded-full text-xs font-bold border"
@@ -1041,7 +1044,7 @@ function RecurrenceEditor({ recurrence, onChange }) {
             onChange={(e) => onChange({ ...recurrence, intervalDays: Math.max(1, parseInt(e.target.value) || 1) })}
             className="w-20 px-2 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }}
           />
-          <span className="text-sm" style={{ color: C.inkSoft }}>dias {type === "after_completion" ? "após concluir a tarefa" : "de intervalo"}</span>
+          <span className="text-sm" style={{ color: C.inkSoft }}>{t("dias")} {type === "after_completion" ? t("após concluir a tarefa") : t("de intervalo")}</span>
         </div>
       )}
     </div>
@@ -1093,26 +1096,26 @@ function AttachmentEditor({ attachments, onChange, onOpen }) {
   return (
     <div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => imgCam.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><Camera size={14} /> Foto</button>
-        <button type="button" onClick={() => imgFile.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><ImageIcon size={14} /> Imagem</button>
-        <button type="button" onClick={() => docFile.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><FileText size={14} /> PDF/Documento</button>
-        <button type="button" onClick={() => setShowLink((v) => !v)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><Link2 size={14} /> Link</button>
-        <button type="button" onClick={() => setShowNote((v) => !v)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><StickyNote size={14} /> Nota</button>
-        <button type="button" onClick={addLocation} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><MapPin size={14} /> Localização</button>
+        <button type="button" onClick={() => imgCam.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><Camera size={14} /> {t("Foto")}</button>
+        <button type="button" onClick={() => imgFile.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><ImageIcon size={14} /> {t("Imagem")}</button>
+        <button type="button" onClick={() => docFile.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><FileText size={14} /> {t("PDF/Documento")}</button>
+        <button type="button" onClick={() => setShowLink((v) => !v)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><Link2 size={14} /> {t("Link")}</button>
+        <button type="button" onClick={() => setShowNote((v) => !v)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><StickyNote size={14} /> {t("Nota")}</button>
+        <button type="button" onClick={addLocation} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium" style={btnStyle}><MapPin size={14} /> {t("Localização")}</button>
         <input ref={imgCam} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) addFile(f, "image"); e.target.value = ""; }} />
         <input ref={imgFile} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) addFile(f, "image"); e.target.value = ""; }} />
         <input ref={docFile} type="file" accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) addFile(f, "file"); e.target.value = ""; }} />
       </div>
       {showLink && (
         <div className="flex gap-2 mt-2">
-          <input value={linkDraft} onChange={(e) => setLinkDraft(e.target.value)} placeholder="https://..." className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }} />
-          <button type="button" onClick={addLink} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>Adicionar</button>
+          <input value={linkDraft} onChange={(e) => setLinkDraft(e.target.value)} placeholder={t("https://...")} className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }} />
+          <button type="button" onClick={addLink} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>{t("Adicionar")}</button>
         </div>
       )}
       {showNote && (
         <div className="flex gap-2 mt-2">
-          <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Escreva a nota..." className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }} />
-          <button type="button" onClick={addNote} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>Adicionar</button>
+          <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder={t("Escreva a nota...")} className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }} />
+          <button type="button" onClick={addNote} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>{t("Adicionar")}</button>
         </div>
       )}
       {attachments.length > 0 && (
@@ -1155,14 +1158,14 @@ function CommentsEditor({ comments, onChange }) {
         </div>
       )}
       <div className="flex gap-2">
-        <input value={author} onChange={(e) => setAuthor(e.target.value)} className="w-24 px-2 py-2 rounded-lg border text-xs outline-none" style={{ borderColor: C.border, color: C.ink }} placeholder="Nome" />
+        <input value={author} onChange={(e) => setAuthor(e.target.value)} className="w-24 px-2 py-2 rounded-lg border text-xs outline-none" style={{ borderColor: C.border, color: C.ink }} placeholder={t("Nome")} />
         <input
           value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
           className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }}
-          placeholder="Escrever um comentário..."
+          placeholder={t("Escrever um comentário...")}
         />
-        <button type="button" onClick={add} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>Enviar</button>
+        <button type="button" onClick={add} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>{t("Enviar")}</button>
       </div>
     </div>
   );
@@ -1179,11 +1182,11 @@ function InstallBanner({ variant, onInstall, onDismiss }) {
         <Smartphone size={18} color={C.primary} className="flex-shrink-0" />
         <div className="flex-1 text-sm" style={{ color: C.ink }}>
           {variant === "android"
-            ? "Instale o Vivaro na tela inicial do seu celular para usar como um app e receber os lembretes em formato de notificação."
-            : "Para instalar o Vivaro no iPhone: toque no ícone de Compartilhar do Safari e depois em \"Adicionar à Tela de Início\"."}
+            ? t("Instale o Vivaro na tela inicial do seu celular para usar como um app e receber os lembretes em formato de notificação.")
+            : t("Para instalar o Vivaro no iPhone: toque no ícone de Compartilhar do Safari e depois em \"Adicionar à Tela de Início\".")}
         </div>
         {variant === "android" && (
-          <button onClick={onInstall} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.primary }}>Instalar</button>
+          <button onClick={onInstall} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.primary }}>{t("Instalar")}</button>
         )}
         <button onClick={onDismiss} className="flex-shrink-0" style={{ color: C.inkSoft }}><X size={16} /></button>
       </div>
@@ -1202,11 +1205,11 @@ function NotificationBanner({ permission, onEnable, onDismiss }) {
         <BellRing size={18} color={C.accent} className="flex-shrink-0" />
         <div className="flex-1 text-sm" style={{ color: C.ink }}>
           {permission === "denied"
-            ? "As notificações estão bloqueadas nas configurações do navegador. Ative-as manualmente para receber os lembretes."
-            : "Ative as notificações para receber avisos dos lembretes que você configurar nas tarefas."}
+            ? t("As notificações estão bloqueadas nas configurações do navegador. Ative-as manualmente para receber os lembretes.")
+            : t("Ative as notificações para receber avisos dos lembretes que você configurar nas tarefas.")}
         </div>
         {permission === "default" && (
-          <button onClick={onEnable} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>Ativar</button>
+          <button onClick={onEnable} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>{t("Ativar")}</button>
         )}
         <button onClick={onDismiss} className="flex-shrink-0" style={{ color: C.inkSoft }}><X size={16} /></button>
       </div>
@@ -1217,20 +1220,288 @@ function NotificationBanner({ permission, onEnable, onDismiss }) {
 function ReminderToasts({ toasts, onDismiss, onExport }) {
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed bottom-4 right-4 left-4 sm:left-auto z-[80] flex flex-col gap-2 sm:w-80">
-      {toasts.map((t) => (
-        <div key={t.id} className="rounded-xl p-3.5 shadow-lg flex items-start gap-2.5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+    <div className="fixed bottom-20 right-4 left-4 sm:left-auto z-[80] flex flex-col gap-2 sm:w-80">
+      {toasts.map((tk) => (
+        <div key={tk.id} className="rounded-xl p-3.5 shadow-lg flex items-start gap-2.5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
           <BellRing size={16} color={C.accent} className="flex-shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-semibold" style={{ color: C.ink }}>Lembrete: {t.task.title}</div>
+            <div className="text-sm font-semibold" style={{ color: C.ink }}>{t("Lembrete:")} {tk.task.title}</div>
             <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>
-              Prazo {fmtDate(t.task.dueAt)}{fmtTime(t.task.dueAt) ? ` · ${fmtTime(t.task.dueAt)}` : ""}
+              {t("Prazo")} {fmtDate(tk.task.dueAt)}{fmtTime(tk.task.dueAt) ? ` · ${fmtTime(tk.task.dueAt)}` : ""}
             </div>
-            <button onClick={() => onExport(t.task)} className="text-xs font-semibold mt-1.5" style={{ color: C.primary }}>Ver na Google Agenda</button>
+            <button onClick={() => onExport(tk.task)} className="text-xs font-semibold mt-1.5" style={{ color: C.primary }}>{t("Ver na Google Agenda")}</button>
           </div>
-          <button onClick={() => onDismiss(t.id)} style={{ color: C.inkSoft }}><X size={14} /></button>
+          <button onClick={() => onDismiss(tk.id)} style={{ color: C.inkSoft }}><X size={14} /></button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Módulos (menu fixo no rodapé) e módulo Saúde → Hidratação          */
+/* ------------------------------------------------------------------ */
+const MODULES = [
+  { id: "tarefas", get label() { return t("Tarefas"); }, icon: LayoutDashboard },
+  { id: "saude", get label() { return t("Saúde"); }, icon: HeartPulse },
+  // Novos módulos: basta acrescentar uma linha aqui e tratar o id no App.
+];
+
+function BottomNav({ module, onChange }) {
+  return (
+    <nav aria-label={t("Módulos")} className="fixed bottom-0 inset-x-0 z-[60]" style={{ background: C.surface, borderTop: `1px solid ${C.border}`, paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="flex gap-1.5 overflow-x-auto px-3 py-2 max-w-6xl mx-auto" style={{ scrollbarWidth: "none" }}>
+        {MODULES.map((m) => {
+          const active = module === m.id;
+          return (
+            <button
+              key={m.id} onClick={() => onChange(m.id)}
+              className="flex-shrink-0 min-w-[92px] flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl text-[11px] font-semibold"
+              style={{ background: active ? C.primarySoft : "transparent", color: active ? C.primary : C.inkSoft }}
+            >
+              <m.icon size={20} />
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+const HEALTH_KEY = "vivaro:health:v1";
+const DEFAULT_HYDRATION = { goalMl: 2000, intervalMin: 120, start: "08:00", end: "22:00", remindersOn: true, days: [0, 1, 2, 3, 4, 5, 6], amounts: [200, 300, 400], log: [] };
+
+function loadHealth() {
+  try {
+    const raw = localStorage.getItem(HEALTH_KEY);
+    if (raw) {
+      const h = JSON.parse(raw);
+      const hy = { ...DEFAULT_HYDRATION, ...(h.hydration || {}) };
+      if (!Array.isArray(hy.log)) hy.log = [];
+      if (!Array.isArray(hy.days)) hy.days = [...DEFAULT_HYDRATION.days];
+      if (!Array.isArray(hy.amounts) || hy.amounts.length !== 3) hy.amounts = [...DEFAULT_HYDRATION.amounts];
+      return { hydration: hy };
+    }
+  } catch (e) { /* ignore */ }
+  return { hydration: { ...DEFAULT_HYDRATION, amounts: [...DEFAULT_HYDRATION.amounts], log: [] } };
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const totalForDay = (log, d) => log.reduce((sum, e) => (dayKey(new Date(e.at)) === dayKey(d) ? sum + (Number(e.ml) || 0) : sum), 0);
+
+// Horários dos lembretes de água para `days` dias a partir de hoje
+function hydrationSlots(hy, days) {
+  const out = [];
+  const [sh, sm] = (hy.start || "08:00").split(":").map(Number);
+  const [eh, em] = (hy.end || "22:00").split(":").map(Number);
+  const startMin = (sh || 0) * 60 + (sm || 0);
+  const endMin = (eh || 0) * 60 + (em || 0);
+  const step = Math.max(15, Number(hy.intervalMin) || 120);
+  for (let i = 0; i < days; i++) {
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    base.setDate(base.getDate() + i);
+    if (Array.isArray(hy.days) && !hy.days.includes(base.getDay())) continue;
+    for (let m = startMin; m <= endMin; m += step) {
+      const d = new Date(base);
+      d.setHours(0, m, 0, 0);
+      out.push(d);
+    }
+  }
+  return out;
+}
+
+const INTERVAL_OPTIONS = [30, 45, 60, 90, 120, 150, 180, 240];
+const intervalLabel = (m) => {
+  if (m < 60) return t("A cada {n} min", { n: m });
+  const h = Math.floor(m / 60), r = m % 60;
+  return t("A cada {h}", { h: r ? `${h} h ${r}` : `${h} h` });
+};
+
+function HealthView({ health, onChange, onAdd, onRemove, onTest }) {
+  const [sub, setSub] = useState(null);
+  const hy = health.hydration;
+  const today = totalForDay(hy.log, new Date());
+  if (sub === "hidratacao") return <HydrationView hy={hy} onChange={onChange} onAdd={onAdd} onRemove={onRemove} onTest={onTest} onBack={() => setSub(null)} />;
+  const pct = Math.min(100, Math.round((today / Math.max(1, hy.goalMl)) * 100));
+  return (
+    <div className="max-w-xl space-y-4">
+      <h2 className="font-bold text-lg inline-flex items-center gap-2" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><HeartPulse size={20} color={C.accent} /> {t("Módulos de saúde")}</h2>
+      <button onClick={() => setSub("hidratacao")} className="w-full text-left rounded-2xl p-4 flex items-center gap-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: C.primarySoft }}><Droplets size={24} color={C.primary} /></div>
+        <div className="flex-1 min-w-0">
+          <div className="font-bold" style={{ color: C.ink }}>{t("Hidratação")}</div>
+          <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>{t("Meta diária de água e lembretes para beber")}</div>
+          <div className="h-1.5 rounded-full mt-2 overflow-hidden" style={{ background: C.surfaceSunk }}><div className="h-full rounded-full" style={{ width: `${pct}%`, background: C.primary }} /></div>
+          <div className="text-[11px] mt-1" style={{ color: C.inkSoft }}>{today} / {hy.goalMl} ml</div>
+        </div>
+        <ChevronRight size={18} style={{ color: C.inkSoft }} />
+      </button>
+      <div className="text-xs text-center py-3 rounded-2xl" style={{ color: C.inkSoft, border: `1px dashed ${C.border}` }}>{t("Mais módulos de saúde em breve")}</div>
+    </div>
+  );
+}
+
+function HydrationView({ hy, onChange, onAdd, onRemove, onTest, onBack }) {
+  const [custom, setCustom] = useState("");
+  const now = new Date();
+  const total = totalForDay(hy.log, now);
+  const goal = Math.max(1, hy.goalMl);
+  const pct = Math.min(100, Math.round((total / goal) * 100));
+  const left = Math.max(0, goal - total);
+  const R = 62, CIRC = 2 * Math.PI * R;
+  const todayLog = hy.log.filter((e) => dayKey(new Date(e.at)) === dayKey(now)).sort((a, b) => new Date(b.at) - new Date(a.at));
+  const week = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (6 - i));
+    return { d, total: totalForDay(hy.log, d) };
+  });
+  const maxBar = Math.max(goal, ...week.map((w) => w.total));
+  const card = { background: C.surface, border: `1px solid ${C.border}` };
+  const input = "px-2.5 py-2 rounded-lg border text-sm outline-none";
+  const num = (v, min, max, fb) => Math.min(max, Math.max(min, parseInt(v, 10) || fb));
+
+  return (
+    <div className="max-w-xl space-y-4">
+      <button onClick={onBack} className="inline-flex items-center gap-1 text-sm font-semibold" style={{ color: C.primary }}><ChevronLeft size={16} /> {t("Voltar")}</button>
+      <h2 className="font-bold text-lg inline-flex items-center gap-2" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><Droplets size={20} color={C.primary} /> {t("Hidratação")}</h2>
+
+      <div className="rounded-2xl p-5 flex flex-col items-center" style={card}>
+        <div className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>{t("Hoje")}</div>
+        <div className="relative" style={{ width: 160, height: 160 }}>
+          <svg width="160" height="160" viewBox="0 0 160 160" style={{ transform: "rotate(-90deg)" }}>
+            <circle cx="80" cy="80" r={R} fill="none" stroke="var(--v-surfaceSunk)" strokeWidth="14" />
+            <circle cx="80" cy="80" r={R} fill="none" stroke="var(--v-primary)" strokeWidth="14" strokeLinecap="round" strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - pct / 100)} style={{ transition: "stroke-dashoffset .4s" }} />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="text-2xl font-bold" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{pct}%</div>
+            <div className="text-xs" style={{ color: C.inkSoft }}>{total} / {hy.goalMl} ml</div>
+          </div>
+        </div>
+        <div className="text-sm font-semibold mt-3" style={{ color: left === 0 ? C.primary : C.ink }}>
+          {left === 0 ? t("Meta atingida! 🎉") : t("Faltam {n} ml para a meta", { n: left })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={card}>
+        <div className="text-sm font-bold mb-2" style={{ color: C.ink }}>{t("Quanto bebeu?")}</div>
+        <div className="grid grid-cols-3 gap-2">
+          {hy.amounts.map((ml, i) => (
+            <button key={i} onClick={() => onAdd(ml)} className="py-3 rounded-xl font-bold text-sm" style={{ background: C.primarySoft, color: C.primary }}>+{ml} ml</button>
+          ))}
+        </div>
+        <div className="flex gap-2 mt-3">
+          <input type="number" min={1} value={custom} onChange={(e) => setCustom(e.target.value)} placeholder={t("Outra quantidade (ml)")} className={`${input} flex-1`} style={{ borderColor: C.border, color: C.ink }} />
+          <button onClick={() => { const ml = parseInt(custom, 10); if (ml > 0) { onAdd(Math.min(ml, 5000)); setCustom(""); } }} className="px-4 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.accent }}>{t("Adicionar")}</button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={card}>
+        <div className="text-sm font-bold mb-2" style={{ color: C.ink }}>{t("Registos de hoje")}</div>
+        {todayLog.length === 0 && <div className="text-xs" style={{ color: C.inkSoft }}>{t("Ainda sem registos hoje.")}</div>}
+        <div className="space-y-1.5">
+          {todayLog.map((e) => (
+            <div key={e.id} className="flex items-center gap-2 text-sm" style={{ color: C.ink }}>
+              <Droplets size={14} color={C.primary} />
+              <span className="font-semibold">{e.ml} ml</span>
+              <span className="text-xs flex-1" style={{ color: C.inkSoft }}>{new Date(e.at).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}</span>
+              <button onClick={() => onRemove(e.id)} title={t("Remover")} className="p-1" style={{ color: C.danger }}><Trash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={card}>
+        <div className="text-sm font-bold mb-3" style={{ color: C.ink }}>{t("Últimos 7 dias")}</div>
+        <div className="flex items-end gap-2" style={{ height: 110 }}>
+          {week.map((w, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
+              <div className="w-full rounded-t-md" title={`${w.total} ml`} style={{ height: `${Math.max(3, (w.total / maxBar) * 84)}px`, background: w.total >= goal ? C.primary : C.primarySoft }} />
+              <div className="text-[10px]" style={{ color: C.inkSoft }}>{w.d.toLocaleDateString(locale(), { weekday: "narrow" })}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5 space-y-4" style={card}>
+        <div className="text-sm font-bold" style={{ color: C.ink }}>{t("Configuração")}</div>
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Meta diária (ml)")}</label>
+          <input type="number" min={500} max={10000} step={100} value={hy.goalMl} onChange={(e) => onChange({ goalMl: num(e.target.value, 100, 10000, 2000) })} className={`${input} w-full mt-1.5`} style={{ borderColor: C.border, color: C.ink }} />
+        </div>
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Quantidades rápidas (ml)")}</label>
+          <div className="grid grid-cols-3 gap-2 mt-1.5">
+            {hy.amounts.map((ml, i) => (
+              <input key={i} type="number" min={50} max={2000} step={50} value={ml} onChange={(e) => { const a = [...hy.amounts]; a[i] = num(e.target.value, 50, 2000, DEFAULT_HYDRATION.amounts[i]); onChange({ amounts: a }); }} className={input} style={{ borderColor: C.border, color: C.ink }} />
+            ))}
+          </div>
+          <div className="text-xs mt-1.5" style={{ color: C.inkSoft }}>{t("Estas 3 quantidades aparecem como botões em cada lembrete.")}</div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5 space-y-4" style={card}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-bold inline-flex items-center gap-1.5" style={{ color: C.ink }}><BellRing size={15} color={C.accent} /> {t("Ativar lembretes de hidratação")}</div>
+            <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>{hy.remindersOn ? t("Cada lembrete mostra uma curiosidade sobre hidratação.") : t("Lembretes desligados. Ligue para receber avisos nos dias e horas escolhidos.")}</div>
+          </div>
+          <button onClick={() => onChange({ remindersOn: !hy.remindersOn })} role="switch" aria-checked={hy.remindersOn} className="flex-shrink-0 w-12 h-7 rounded-full relative transition-colors" style={{ background: hy.remindersOn ? C.primary : C.border }}>
+            <span className="absolute top-0.5 w-6 h-6 rounded-full bg-white transition-all" style={{ left: hy.remindersOn ? 22 : 2 }} />
+          </button>
+        </div>
+
+        <div style={{ opacity: hy.remindersOn ? 1 : 0.45, pointerEvents: hy.remindersOn ? "auto" : "none" }} className="space-y-4">
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Dias dos lembretes")}</label>
+            <div className="flex gap-1.5 mt-1.5 flex-wrap">
+              {weekdayShort().map((lbl, d) => {
+                const on = hy.days.includes(d);
+                return (
+                  <button key={d} onClick={() => onChange({ days: on ? hy.days.filter((x) => x !== d) : [...hy.days, d].sort() })} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold capitalize" style={{ background: on ? C.primary : C.surfaceSunk, color: on ? "#fff" : C.inkSoft }}>{lbl}</button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Início dos alertas")}</label>
+              <input type="time" value={hy.start} onChange={(e) => onChange({ start: e.target.value || "08:00" })} className={`${input} w-full mt-1.5`} style={{ borderColor: C.border, color: C.ink }} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Fim dos alertas")}</label>
+              <input type="time" value={hy.end} onChange={(e) => onChange({ end: e.target.value || "22:00" })} className={`${input} w-full mt-1.5`} style={{ borderColor: C.border, color: C.ink }} />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Frequência do lembrete")}</label>
+            <select value={hy.intervalMin} onChange={(e) => onChange({ intervalMin: parseInt(e.target.value, 10) })} className={`${input} w-full mt-1.5`} style={{ borderColor: C.border, color: C.ink }}>
+              {[...new Set([...INTERVAL_OPTIONS, hy.intervalMin])].sort((a, b) => a - b).map((m) => <option key={m} value={m}>{intervalLabel(m)}</option>)}
+            </select>
+          </div>
+          {onTest && (
+            <button onClick={onTest} className="w-full px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.primarySoft, color: C.primary }}>{t("Notificação de teste (5 s)")}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Cartão de lembrete de água dentro da app (versão web): escolhe-se logo quanto bebeu
+function WaterPrompt({ tip, amounts, onPick, onLater }) {
+  return (
+    <div className="fixed left-4 right-4 sm:left-auto sm:w-80 bottom-20 z-[80] rounded-2xl p-4 shadow-lg" style={{ background: C.surface, border: `1px solid ${C.primary}` }}>
+      <div className="font-bold text-sm inline-flex items-center gap-1.5" style={{ color: C.ink }}><Droplets size={16} color={C.primary} /> {t("Hora de beber água 💧")}</div>
+      {tip && <div className="text-xs mt-1.5" style={{ color: C.ink }}>💡 {tip}</div>}
+      <div className="text-xs mt-1.5 mb-2.5" style={{ color: C.inkSoft }}>{t("Quanto bebeu? Toque numa quantidade para registar.")}</div>
+      <div className="grid grid-cols-3 gap-2">
+        {amounts.map((ml, i) => (
+          <button key={i} onClick={() => onPick(ml)} className="py-2 rounded-lg font-bold text-sm" style={{ background: C.primarySoft, color: C.primary }}>{ml} ml</button>
+        ))}
+      </div>
+      <button onClick={onLater} className="w-full text-xs font-semibold mt-2.5" style={{ color: C.inkSoft }}>{t("Mais tarde")}</button>
     </div>
   );
 }
@@ -1253,7 +1524,7 @@ function StatusRow({ ok, title, hint, actionLabel, onAction }) {
   );
 }
 
-function NativeSettingsModal({ status, onRefresh, onClose }) {
+function SettingsModal({ status, onRefresh, onClose, lang, onLang }) {
   const [msg, setMsg] = useState("");
   const toggleKeepAlive = async () => {
     await nativeSetKeepAlive(!status.keepAlive);
@@ -1261,57 +1532,74 @@ function NativeSettingsModal({ status, onRefresh, onClose }) {
   };
   const runTest = async (alarm) => {
     await nativeTest(alarm);
-    setMsg(`${alarm ? "Despertador" : "Notificação"} de teste em 5 segundos. Pode até bloquear o ecrã ou sair da app.`);
+    setMsg(t("{kind} de teste em 5 segundos. Pode até bloquear o ecrã ou sair da app.", { kind: t(alarm ? "Despertador" : "Notificação").toLowerCase() }));
   };
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }} onClick={onClose}>
       <div className="w-full sm:max-w-md max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 sticky top-0" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-          <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><ShieldCheck size={17} color={C.accent} /> Lembretes e alarmes</span>
+          <span className="font-bold text-lg inline-flex items-center gap-1.5" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}><Settings size={17} color={C.accent} /> {t("Definições")}</span>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
         </div>
         <div className="p-5 space-y-3">
-          <p className="text-xs" style={{ color: C.inkSoft }}>
-            Para os lembretes chegarem sempre à hora certa, mesmo com o Vivaro fechado ou o ecrã bloqueado, confirme os pontos abaixo.
-          </p>
-          <StatusRow
-            ok={status.notifications} title="Notificações"
-            hint={status.notifications ? "Permitidas." : "Sem esta permissão não aparece nenhum lembrete."}
-            actionLabel="Permitir" onAction={async () => { await nativeRequestNotifications(); setTimeout(async () => { const st = await nativeStatus(); if (!st.notifications) await nativeOpenNotificationSettings(); onRefresh(); }, 1500); }}
-          />
-          <StatusRow
-            ok={status.exactAlarms} title="Alarmes e lembretes exatos"
-            hint={status.exactAlarms ? "Permitidos: os avisos disparam à hora marcada." : "Sem isto o Android pode atrasar os avisos alguns minutos."}
-            actionLabel="Permitir" onAction={async () => { await nativeOpenExactAlarmSettings(); }}
-          />
-          <StatusRow
-            ok={status.batteryExempt} title="Sem restrições de bateria"
-            hint={status.batteryExempt ? "O Android não vai parar o Vivaro para poupar bateria." : "Recomendado: evita que o Android pare o Vivaro em segundo plano."}
-            actionLabel="Permitir" onAction={async () => { await nativeRequestBatteryExemption(); }}
-          />
-          <div className="flex items-start gap-3 rounded-xl p-3" style={{ background: C.surfaceSunk }}>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold" style={{ color: C.ink }}>Manter o Vivaro ativo em segundo plano</div>
-              <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>Mostra uma notificação discreta permanente e ajuda a entregar os lembretes.</div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5" style={{ color: C.inkSoft }}><Globe size={13} /> {t("Idioma")}</div>
+            <p className="text-xs mt-1 mb-2" style={{ color: C.inkSoft }}>{t("Escolha o idioma da aplicação. O assistente de IA também passa a responder nesse idioma.")}</p>
+            <div className="grid grid-cols-2 gap-2">
+              {LANGS.map((l) => (
+                <button key={l.code} onClick={() => onLang(l.code)} className="px-3 py-2 rounded-xl text-sm font-semibold text-left inline-flex items-center justify-between gap-2"
+                  style={{ background: lang === l.code ? C.primarySoft : C.surfaceSunk, color: lang === l.code ? C.primary : C.ink, border: `1px solid ${lang === l.code ? C.primary : "transparent"}` }}>
+                  <span>{l.name}</span>{lang === l.code && <Check size={15} />}
+                </button>
+              ))}
             </div>
-            <button onClick={toggleKeepAlive} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0" style={{ background: status.keepAlive ? C.primary : C.border, color: status.keepAlive ? "#fff" : C.ink }}>
-              {status.keepAlive ? "Ligado" : "Desligado"}
-            </button>
           </div>
 
-          <div className="pt-1">
-            <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: C.inkSoft }}>Testar</div>
-            <div className="flex gap-2">
-              <button onClick={() => runTest(false)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.primarySoft, color: C.primary }}>Notificação</button>
-              <button onClick={() => runTest(true)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.accentSoft, color: C.accent }}>Despertador</button>
-            </div>
-            {msg && <div className="text-xs mt-2" style={{ color: C.inkSoft }}>{msg}</div>}
-          </div>
+          {isNative && (
+            <div className="space-y-3 pt-3" style={{ borderTop: `1px solid ${C.border}` }}>
+              <div className="text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5" style={{ color: C.inkSoft }}><ShieldCheck size={13} /> {t("Lembretes e alarmes")}</div>
+              <p className="text-xs" style={{ color: C.inkSoft }}>
+                {t("Para os lembretes chegarem sempre à hora certa, mesmo com o Vivaro fechado ou o ecrã bloqueado, confirme os pontos abaixo.")}
+              </p>
+              <StatusRow
+                ok={status.notifications} title={t("Notificações")}
+                hint={status.notifications ? t("Permitidas.") : t("Sem esta permissão não aparece nenhum lembrete.")}
+                actionLabel={t("Permitir")} onAction={async () => { await nativeRequestNotifications(); setTimeout(async () => { const st = await nativeStatus(); if (!st.notifications) await nativeOpenNotificationSettings(); onRefresh(); }, 1500); }}
+              />
+              <StatusRow
+                ok={status.exactAlarms} title={t("Alarmes e lembretes exatos")}
+                hint={status.exactAlarms ? t("Permitidos: os avisos disparam à hora marcada.") : t("Sem isto o Android pode atrasar os avisos alguns minutos.")}
+                actionLabel={t("Permitir")} onAction={async () => { await nativeOpenExactAlarmSettings(); }}
+              />
+              <StatusRow
+                ok={status.batteryExempt} title={t("Sem restrições de bateria")}
+                hint={status.batteryExempt ? t("O Android não vai parar o Vivaro para poupar bateria.") : t("Recomendado: evita que o Android pare o Vivaro em segundo plano.")}
+                actionLabel={t("Permitir")} onAction={async () => { await nativeRequestBatteryExemption(); }}
+              />
+              <div className="flex items-start gap-3 rounded-xl p-3" style={{ background: C.surfaceSunk }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold" style={{ color: C.ink }}>{t("Manter o Vivaro ativo em segundo plano")}</div>
+                  <div className="text-xs mt-0.5" style={{ color: C.inkSoft }}>{t("Mostra uma notificação discreta permanente e ajuda a entregar os lembretes.")}</div>
+                </div>
+                <button onClick={toggleKeepAlive} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0" style={{ background: status.keepAlive ? C.primary : C.border, color: status.keepAlive ? "#fff" : C.ink }}>
+                  {status.keepAlive ? t("Ligado") : t("Desligado")}
+                </button>
+              </div>
 
-          <p className="text-xs pt-1" style={{ color: C.inkSoft }}>
-            Nas notificações pode tocar em <b>Adiar 10 min</b>, <b>Adiar 1 h</b> ou <b>Concluir</b> sem abrir a app.
-            Em cada tarefa pode ainda ativar a opção <b>Despertador</b>.
-          </p>
+              <div className="pt-1">
+                <div className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: C.inkSoft }}>{t("Testar")}</div>
+                <div className="flex gap-2">
+                  <button onClick={() => runTest(false)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.primarySoft, color: C.primary }}>{t("Notificação")}</button>
+                  <button onClick={() => runTest(true)} className="flex-1 px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.accentSoft, color: C.accent }}>{t("Despertador")}</button>
+                </div>
+                {msg && <div className="text-xs mt-2" style={{ color: C.inkSoft }}>{msg}</div>}
+              </div>
+
+              <p className="text-xs pt-1" style={{ color: C.inkSoft }}>
+                {t("Nas notificações pode tocar em Adiar 10 min, Adiar 1 h ou Concluir sem abrir a app. Em cada tarefa pode ainda ativar a opção Despertador.")}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1325,8 +1613,8 @@ function NativeSetupBanner({ status, onOpen }) {
     <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-3">
       <div className="flex items-center gap-3 rounded-2xl px-4 py-3" style={{ background: C.accentSoft, border: `1px solid ${C.accent}` }}>
         <BellRing size={18} color={C.accent} className="flex-shrink-0" />
-        <div className="flex-1 text-sm" style={{ color: C.ink }}>Falta ativar permissões para os lembretes funcionarem sempre à hora certa.</div>
-        <button onClick={onOpen} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>Configurar</button>
+        <div className="flex-1 text-sm" style={{ color: C.ink }}>{t("Falta ativar permissões para os lembretes funcionarem sempre à hora certa.")}</div>
+        <button onClick={onOpen} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white flex-shrink-0" style={{ background: C.accent }}>{t("Configurar")}</button>
       </div>
     </div>
   );
@@ -1340,8 +1628,8 @@ function ThemeToggle({ theme, onToggle }) {
   return (
     <button
       onClick={onToggle}
-      title={dark ? "Mudar para tema claro" : "Mudar para tema escuro"}
-      aria-label={dark ? "Mudar para tema claro" : "Mudar para tema escuro"}
+      title={dark ? t("Mudar para tema claro") : t("Mudar para tema escuro")}
+      aria-label={dark ? t("Mudar para tema claro") : t("Mudar para tema escuro")}
       className="relative inline-flex items-center w-12 h-7 rounded-full flex-shrink-0 transition-colors"
       style={{ background: C.surfaceSunk, border: `1px solid ${C.border}` }}
     >
@@ -1362,7 +1650,7 @@ function ThemeToggle({ theme, onToggle }) {
 async function listenNative(onText, setListening) {
   setListening(true);
   try {
-    const text = await nativeListen("pt-BR");
+    const text = await nativeListen(voiceLang());
     if (text) onText(text);
   } catch (e) {
     alert((e && e.message) || "Não foi possível usar o microfone.");
@@ -1376,9 +1664,9 @@ function VoiceCaptureButton({ onResult }) {
   const start = () => {
     if (isNative) { listenNative(onResult, setListening); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome."); return; }
+    if (!SR) { alert(t("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome.")); return; }
     const rec = new SR();
-    rec.lang = "pt-BR";
+    rec.lang = voiceLang();
     rec.interimResults = false;
     rec.maxAlternatives = 1;
     rec.onresult = (e) => onResult(e.results[0][0].transcript);
@@ -1389,11 +1677,11 @@ function VoiceCaptureButton({ onResult }) {
   };
   return (
     <button
-      onClick={start} title="Criar tarefa por voz"
+      onClick={start} title={t("Criar tarefa por voz")}
       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold text-sm"
       style={{ background: listening ? C.accent : C.surfaceSunk, color: listening ? "#fff" : C.ink }}
     >
-      <Mic size={16} /> <span className="hidden sm:inline">{listening ? "Ouvindo..." : "Voz"}</span>
+      <Mic size={16} /> <span className="hidden sm:inline">{listening ? t("Ouvindo...") : t("Voz")}</span>
     </button>
   );
 }
@@ -1404,9 +1692,9 @@ function DictateFieldButton({ onText, title = "Ditar por voz" }) {
   const start = () => {
     if (isNative) { listenNative(onText, setListening); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome."); return; }
+    if (!SR) { alert(t("Reconhecimento de voz não é suportado neste navegador. Tente pelo Google Chrome.")); return; }
     const rec = new SR();
-    rec.lang = "pt-BR";
+    rec.lang = voiceLang();
     rec.interimResults = false;
     rec.maxAlternatives = 1;
     rec.onresult = (e) => onText(e.results[0][0].transcript);
@@ -1421,7 +1709,7 @@ function DictateFieldButton({ onText, title = "Ditar por voz" }) {
       className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold flex-shrink-0"
       style={{ background: listening ? C.accent : C.surfaceSunk, color: listening ? "#fff" : C.inkSoft }}
     >
-      <Mic size={12} /> {listening ? "Ouvindo..." : "Ditar"}
+      <Mic size={12} /> {listening ? t("Ouvindo...") : t("Ditar")}
     </button>
   );
 }
@@ -1482,39 +1770,39 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }}>
       <div className="w-full sm:max-w-lg max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }}>
         <div className="flex items-center justify-between px-5 py-4 sticky top-0 z-10" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-          <h2 className="font-bold text-lg" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{initial ? "Editar tarefa" : "Nova tarefa"}</h2>
+          <h2 className="font-bold text-lg" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{initial ? t("Editar tarefa") : t("Nova tarefa")}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
         </div>
 
         <div className="p-5 space-y-5">
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Título</label>
-            <input autoFocus value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Ex: Finalizar relatório mensal"
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Título")}</label>
+            <input autoFocus value={form.title} onChange={(e) => update("title", e.target.value)} placeholder={t("Ex: Finalizar relatório mensal")}
               className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-[15px]" style={{ borderColor: C.border, color: C.ink }} />
           </div>
 
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Descrição</label>
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Descrição")}</label>
               <DictateFieldButton
-                title="Ditar descrição por voz"
+                title={t("Ditar descrição por voz")}
                 onText={(transcript) => update("description", form.description ? `${form.description} ${transcript}` : transcript)}
               />
             </div>
-            <textarea value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Detalhes da tarefa (opcional) — ou toque em Ditar e fale" rows={2}
+            <textarea value={form.description} onChange={(e) => update("description", e.target.value)} placeholder={t("Detalhes da tarefa (opcional) — ou toque em Ditar e fale")} rows={2}
               className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-sm resize-none" style={{ borderColor: C.border, color: C.ink }} />
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Categoria</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Categoria")}</label>
             <div className="flex gap-2 mt-1.5">
-              <Pill active={form.category === "pessoal"} onClick={() => update("category", "pessoal")} color={C.pessoal} softColor={C.pessoalSoft} icon={User}>Pessoal</Pill>
-              <Pill active={form.category === "profissional"} onClick={() => update("category", "profissional")} color={C.profissional} softColor={C.profissionalSoft} icon={Briefcase}>Profissional</Pill>
+              <Pill active={form.category === "pessoal"} onClick={() => update("category", "pessoal")} color={C.pessoal} softColor={C.pessoalSoft} icon={User}>{t("Pessoal")}</Pill>
+              <Pill active={form.category === "profissional"} onClick={() => update("category", "profissional")} color={C.profissional} softColor={C.profissionalSoft} icon={Briefcase}>{t("Profissional")}</Pill>
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Prioridade (matriz de Eisenhower)</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Prioridade (matriz de Eisenhower)")}</label>
             <div className="grid grid-cols-2 gap-2 mt-1.5">
               {QUADRANTS.map((q) => (
                 <button key={q.id} onClick={() => update("quadrant", q.id)} className="rounded-xl p-2.5 text-left border-2 transition-all" style={{ background: q.soft, borderColor: form.quadrant === q.id ? q.color : "transparent" }}>
@@ -1526,14 +1814,14 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Estado</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Estado")}</label>
             <select value={form.status} onChange={(e) => update("status", e.target.value)} className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-sm font-medium" style={{ borderColor: C.border, color: C.ink }}>
               {STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Prazo</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Prazo")}</label>
             <div className="flex gap-2 mt-1.5">
               <input type="date" value={form.dueDate} onChange={(e) => update("dueDate", e.target.value)} className="flex-1 px-3 py-2.5 rounded-xl outline-none border text-sm" style={{ borderColor: C.border, color: C.ink }} />
               <input type="time" value={form.dueTime} onChange={(e) => update("dueTime", e.target.value)} className="w-28 px-3 py-2.5 rounded-xl outline-none border text-sm" style={{ borderColor: C.border, color: C.ink }} />
@@ -1541,22 +1829,22 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Recorrência</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Recorrência")}</label>
             <div className="mt-1.5"><RecurrenceEditor recurrence={form.recurrence} onChange={(r) => update("recurrence", r)} /></div>
           </div>
 
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Lembretes</label>
-              <button onClick={addReminder} className="text-xs font-semibold inline-flex items-center gap-1" style={{ color: C.primary }}><Plus size={13} /> Adicionar lembrete</button>
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Lembretes")}</label>
+              <button onClick={addReminder} className="text-xs font-semibold inline-flex items-center gap-1" style={{ color: C.primary }}><Plus size={13} /> {t("Adicionar lembrete")}</button>
             </div>
             <div className="space-y-2 mt-1.5">
-              {form.reminders.length === 0 && <div className="text-xs" style={{ color: C.inkSoft }}>Nenhum lembrete configurado.</div>}
+              {form.reminders.length === 0 && <div className="text-xs" style={{ color: C.inkSoft }}>{t("Nenhum lembrete configurado.")}</div>}
               {form.reminders.map((r) => (
                 <div key={r.id} className="flex items-center gap-2">
                   <input type="number" min={1} value={r.value} onChange={(e) => updateReminder(r.id, { value: Math.max(1, parseInt(e.target.value) || 1) })} className="w-16 px-2 py-1.5 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }} />
                   <select value={r.unit} onChange={(e) => updateReminder(r.id, { unit: e.target.value })} className="px-2 py-1.5 rounded-lg border text-sm outline-none flex-1" style={{ borderColor: C.border, color: C.ink }}>
-                    {REMINDER_UNITS.map((u) => <option key={u.id} value={u.id}>{u.label} antes</option>)}
+                    {REMINDER_UNITS.map((u) => <option key={u.id} value={u.id}>{u.label} {t("antes")}</option>)}
                   </select>
                   <button onClick={() => removeReminder(r.id)} className="p-1.5" style={{ color: C.danger }}><X size={15} /></button>
                 </div>
@@ -1566,48 +1854,48 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
 
           {isNative && (
             <div className="rounded-xl p-3 space-y-2" style={{ background: C.surfaceSunk }}>
-              <div className="text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5" style={{ color: C.inkSoft }}><AlarmClock size={13} /> Despertador</div>
+              <div className="text-xs font-semibold uppercase tracking-wide inline-flex items-center gap-1.5" style={{ color: C.inkSoft }}><AlarmClock size={13} /> {t("Despertador")}</div>
               <label className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: C.ink }}>
                 <input type="checkbox" className="mt-0.5" checked={!!form.alarmMode} onChange={(e) => update("alarmMode", e.target.checked)} />
-                <span>Tocar como despertador (som de alarme, repete até dispensar) nos lembretes e no prazo desta tarefa</span>
+                <span>{t("Tocar como despertador (som de alarme, repete até dispensar) nos lembretes e no prazo desta tarefa")}</span>
               </label>
               <label className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: C.ink }}>
                 <input type="checkbox" className="mt-0.5" checked={!!form.clockAlarm} onChange={(e) => update("clockAlarm", e.target.checked)} />
-                <span>Criar também um alarme na app Relógio do telemóvel à hora do prazo <span style={{ color: C.inkSoft }}>(só quando faltarem menos de 24 h e com o Vivaro aberto)</span></span>
+                <span>{t("Criar também um alarme na app Relógio do telemóvel à hora do prazo")} <span style={{ color: C.inkSoft }}>{t("(só quando faltarem menos de 24 h e com o Vivaro aberto)")}</span></span>
               </label>
             </div>
           )}
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Subtarefas</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Subtarefas")}</label>
             <div className="mt-1.5"><SubtaskEditor subtasks={form.subtasks} onChange={(s) => update("subtasks", s)} /></div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Responsável</label>
-              <input value={form.assignee} onChange={(e) => update("assignee", e.target.value)} placeholder="Ex: João" className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-sm" style={{ borderColor: C.border, color: C.ink }} />
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Responsável")}</label>
+              <input value={form.assignee} onChange={(e) => update("assignee", e.target.value)} placeholder={t("Ex: João")} className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-sm" style={{ borderColor: C.border, color: C.ink }} />
             </div>
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Observadores</label>
-              <div className="mt-1.5"><TagInput values={form.watchers} onChange={(w) => update("watchers", w)} placeholder="Adicionar observador" /></div>
+              <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Observadores")}</label>
+              <div className="mt-1.5"><TagInput values={form.watchers} onChange={(w) => update("watchers", w)} placeholder={t("Adicionar observador")} /></div>
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Anexos</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Anexos")}</label>
             <div className="mt-1.5"><AttachmentEditor attachments={form.attachments} onChange={(a) => update("attachments", a)} onOpen={onOpenAttachment} /></div>
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>Comentários</label>
+            <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Comentários")}</label>
             <div className="mt-1.5"><CommentsEditor comments={form.comments} onChange={(c) => update("comments", c)} /></div>
           </div>
         </div>
 
         <div className="flex gap-2 px-5 py-4 sticky bottom-0" style={{ background: C.surface, borderTop: `1px solid ${C.border}` }}>
-          <button onClick={onClose} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: C.border, color: C.inkSoft }}>Cancelar</button>
-          <button onClick={handleSubmit} disabled={!form.title.trim()} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm text-white disabled:opacity-40" style={{ background: C.primary }}>Salvar tarefa</button>
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: C.border, color: C.inkSoft }}>{t("Cancelar")}</button>
+          <button onClick={handleSubmit} disabled={!form.title.trim()} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm text-white disabled:opacity-40" style={{ background: C.primary }}>{t("Salvar tarefa")}</button>
         </div>
       </div>
     </div>
@@ -1621,9 +1909,9 @@ function FilterBar({ filters, setFilters }) {
   const toggleStatus = (id) => setFilters((f) => ({ ...f, statuses: f.statuses.includes(id) ? f.statuses.filter((s) => s !== id) : [...f.statuses, id] }));
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Pill active={filters.category === "todas"} onClick={() => setFilters((f) => ({ ...f, category: "todas" }))} color={C.ink} softColor={C.surfaceSunk}>Todas</Pill>
-      <Pill active={filters.category === "pessoal"} onClick={() => setFilters((f) => ({ ...f, category: "pessoal" }))} color={C.pessoal} softColor={C.pessoalSoft} icon={User}>Pessoal</Pill>
-      <Pill active={filters.category === "profissional"} onClick={() => setFilters((f) => ({ ...f, category: "profissional" }))} color={C.profissional} softColor={C.profissionalSoft} icon={Briefcase}>Profissional</Pill>
+      <Pill active={filters.category === "todas"} onClick={() => setFilters((f) => ({ ...f, category: "todas" }))} color={C.ink} softColor={C.surfaceSunk}>{t("Todas")}</Pill>
+      <Pill active={filters.category === "pessoal"} onClick={() => setFilters((f) => ({ ...f, category: "pessoal" }))} color={C.pessoal} softColor={C.pessoalSoft} icon={User}>{t("Pessoal")}</Pill>
+      <Pill active={filters.category === "profissional"} onClick={() => setFilters((f) => ({ ...f, category: "profissional" }))} color={C.profissional} softColor={C.profissionalSoft} icon={Briefcase}>{t("Profissional")}</Pill>
 
       <div className="w-px h-5 mx-1" style={{ background: C.border }} />
       {STATUSES.map((s) => (
@@ -1631,12 +1919,12 @@ function FilterBar({ filters, setFilters }) {
       ))}
 
       <div className="w-px h-5 mx-1" style={{ background: C.border }} />
-      <Pill active={filters.overdueOnly} onClick={() => setFilters((f) => ({ ...f, overdueOnly: !f.overdueOnly, onTimeOnly: false }))} color={C.danger} softColor={C.dangerSoft} icon={AlertTriangle}>Em atraso</Pill>
-      <Pill active={filters.onTimeOnly} onClick={() => setFilters((f) => ({ ...f, onTimeOnly: !f.onTimeOnly, overdueOnly: false }))} color={C.primary} softColor={C.primarySoft} icon={Clock}>Dentro do prazo</Pill>
+      <Pill active={filters.overdueOnly} onClick={() => setFilters((f) => ({ ...f, overdueOnly: !f.overdueOnly, onTimeOnly: false }))} color={C.danger} softColor={C.dangerSoft} icon={AlertTriangle}>{t("Em atraso")}</Pill>
+      <Pill active={filters.onTimeOnly} onClick={() => setFilters((f) => ({ ...f, onTimeOnly: !f.onTimeOnly, overdueOnly: false }))} color={C.primary} softColor={C.primarySoft} icon={Clock}>{t("Dentro do prazo")}</Pill>
 
       <div className="w-px h-5 mx-1" style={{ background: C.border }} />
       <Pill active={filters.hideDone} onClick={() => setFilters((f) => ({ ...f, hideDone: !f.hideDone }))} color={C.ink} softColor={C.surfaceSunk} icon={filters.hideDone ? EyeOff : Eye}>
-        {filters.hideDone ? "Concluídas/canceladas ocultas" : "Mostrar concluídas/canceladas"}
+        {filters.hideDone ? t("Concluídas/canceladas ocultas") : t("Mostrar concluídas/canceladas")}
       </Pill>
     </div>
   );
@@ -1669,8 +1957,8 @@ function sortByPriority(tasks) {
 function EmptyState() {
   return (
     <div className="text-center py-16 rounded-2xl" style={{ background: C.surface, border: `1px dashed ${C.border}` }}>
-      <div className="text-sm font-semibold" style={{ color: C.ink }}>Nenhuma tarefa por aqui</div>
-      <div className="text-sm mt-1" style={{ color: C.inkSoft }}>Ajuste os filtros ou crie uma nova tarefa para começar.</div>
+      <div className="text-sm font-semibold" style={{ color: C.ink }}>{t("Nenhuma tarefa por aqui")}</div>
+      <div className="text-sm mt-1" style={{ color: C.inkSoft }}>{t("Ajuste os filtros ou crie uma nova tarefa para começar.")}</div>
     </div>
   );
 }
@@ -1684,17 +1972,17 @@ function DashboardView({ tasks, filters, setFilters, activeQuadrant, setActiveQu
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row gap-5 lg:items-start">
         <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>Matriz de Eisenhower</div>
+          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>{t("Matriz de Eisenhower")}</div>
           <EisenhowerWidget tasks={tasks} activeQuadrant={activeQuadrant} onSelect={setActiveQuadrant} />
         </div>
         <div className="flex-1 rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>Filtros</div>
+          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>{t("Filtros")}</div>
           <FilterBar filters={filters} setFilters={setFilters} />
         </div>
       </div>
 
       <div>
-        <div className="text-sm font-semibold mb-2" style={{ color: C.inkSoft }}>{filtered.length} {filtered.length === 1 ? "tarefa" : "tarefas"} · ordenadas por prioridade</div>
+        <div className="text-sm font-semibold mb-2" style={{ color: C.inkSoft }}>{filtered.length} {filtered.length === 1 ? t("tarefa") : t("tarefas")} {t("· ordenadas por prioridade")}</div>
         {filtered.length === 0 ? <EmptyState /> : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             {filtered.map((t) => <TaskCard key={t.id} task={t} {...cardHandlers} />)}
@@ -1742,31 +2030,31 @@ function ListView({ tasks, filters, setFilters, activeQuadrant, ...cardHandlers 
       <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}><FilterBar filters={filters} setFilters={setFilters} /></div>
       {filtered.length === 0 ? <EmptyState /> : (
         <div className="rounded-2xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-          {filtered.map((t, i) => {
-            const q = QUADRANTS.find((x) => x.id === t.quadrant) || QUADRANTS[3];
-            const st = STATUSES.find((s) => s.id === t.status) || STATUSES[0];
-            const overdue = isOverdue(t);
-            const subtasks = t.subtasks || [];
+          {filtered.map((tk, i) => {
+            const q = QUADRANTS.find((x) => x.id === tk.quadrant) || QUADRANTS[3];
+            const st = STATUSES.find((s) => s.id === tk.status) || STATUSES[0];
+            const overdue = isOverdue(tk);
+            const subtasks = tk.subtasks || [];
             const done = subtasks.filter((s) => s.done).length;
             return (
-              <div key={t.id} className="flex items-center gap-3 px-4 py-3 flex-wrap sm:flex-nowrap" style={{ borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
-                <button onClick={() => cardHandlers.onStatusChange(t.id, t.status === "concluido" ? "pendente" : "concluido")} className="w-5 h-5 rounded-full border flex-shrink-0 flex items-center justify-center" style={{ borderColor: t.status === "concluido" ? C.primary : C.border, background: t.status === "concluido" ? C.primary : "transparent" }}>
-                  {t.status === "concluido" && <Check size={12} color="#fff" />}
+              <div key={tk.id} className="flex items-center gap-3 px-4 py-3 flex-wrap sm:flex-nowrap" style={{ borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+                <button onClick={() => cardHandlers.onStatusChange(tk.id, tk.status === "concluido" ? "pendente" : "concluido")} className="w-5 h-5 rounded-full border flex-shrink-0 flex items-center justify-center" style={{ borderColor: tk.status === "concluido" ? C.primary : C.border, background: tk.status === "concluido" ? C.primary : "transparent" }}>
+                  {tk.status === "concluido" && <Check size={12} color="#fff" />}
                 </button>
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: q.color }} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold truncate" style={{ color: C.ink, textDecoration: t.status === "concluido" ? "line-through" : "none" }}>{t.title}</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: C.ink, textDecoration: tk.status === "concluido" ? "line-through" : "none" }}>{tk.title}</div>
                   <div className="flex items-center gap-2 text-xs mt-0.5 flex-wrap" style={{ color: C.inkSoft }}>
-                    <span>{t.category === "pessoal" ? "Pessoal" : "Profissional"}</span>
-                    {t.dueAt && <span style={{ color: overdue ? C.danger : C.inkSoft, fontWeight: overdue ? 700 : 500 }}>· {fmtDate(t.dueAt)}{fmtTime(t.dueAt) ? ` ${fmtTime(t.dueAt)}` : ""}</span>}
+                    <span>{tk.category === "pessoal" ? t("Pessoal") : t("Profissional")}</span>
+                    {tk.dueAt && <span style={{ color: overdue ? C.danger : C.inkSoft, fontWeight: overdue ? 700 : 500 }}>· {fmtDate(tk.dueAt)}{fmtTime(tk.dueAt) ? ` ${fmtTime(tk.dueAt)}` : ""}</span>}
                     {subtasks.length > 0 && <span>· {done}/{subtasks.length}</span>}
-                    {t.recurrence && <span className="inline-flex items-center gap-0.5">· <Repeat size={10} /></span>}
-                    {t.assignee && <span>· {t.assignee}</span>}
+                    {tk.recurrence && <span className="inline-flex items-center gap-0.5">· <Repeat size={10} /></span>}
+                    {tk.assignee && <span>· {tk.assignee}</span>}
                   </div>
                 </div>
                 <Badge color={st.color} soft={C.surfaceSunk}>{st.label}</Badge>
-                <button onClick={() => cardHandlers.onEdit(t)} className="p-1.5" style={{ color: C.inkSoft }}><Pencil size={14} /></button>
-                <button onClick={() => cardHandlers.onDelete(t.id)} className="p-1.5" style={{ color: C.danger }}><Trash2 size={14} /></button>
+                <button onClick={() => cardHandlers.onEdit(tk)} className="p-1.5" style={{ color: C.inkSoft }}><Pencil size={14} /></button>
+                <button onClick={() => cardHandlers.onDelete(tk.id)} className="p-1.5" style={{ color: C.danger }}><Trash2 size={14} /></button>
               </div>
             );
           })}
@@ -1802,11 +2090,11 @@ function CalendarView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
       <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
         <div className="flex items-center justify-between mb-3">
           <button onClick={() => setMonth(new Date(year, mIdx - 1, 1))} className="p-1.5 rounded-lg" style={{ color: C.inkSoft }}><ChevronLeft size={18} /></button>
-          <div className="font-bold capitalize" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{month.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</div>
+          <div className="font-bold capitalize" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{month.toLocaleDateString(locale(), { month: "long", year: "numeric" })}</div>
           <button onClick={() => setMonth(new Date(year, mIdx + 1, 1))} className="p-1.5 rounded-lg" style={{ color: C.inkSoft }}><ChevronRight size={18} /></button>
         </div>
         <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold mb-1" style={{ color: C.inkSoft }}>
-          {["D", "S", "T", "Q", "Q", "S", "S"].map((d, i) => <div key={i}>{d}</div>)}
+          {weekdayNarrow().map((d, i) => <div key={i}>{d}</div>)}
         </div>
         <div className="grid grid-cols-7 gap-1">
           {cells.map((d, i) => {
@@ -1830,7 +2118,7 @@ function CalendarView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
 
       {selectedDate && (
         <div>
-          <div className="text-sm font-semibold mb-2 capitalize" style={{ color: C.ink }}>{selectedDate.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+          <div className="text-sm font-semibold mb-2 capitalize" style={{ color: C.ink }}>{selectedDate.toLocaleDateString(locale(), { weekday: "long", day: "2-digit", month: "long" })}</div>
           {(byDate[selectedDate.toDateString()] || []).length === 0 ? <EmptyState /> : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sortByPriority(byDate[selectedDate.toDateString()] || []).map((t) => <TaskCard key={t.id} task={t} {...cardHandlers} />)}
@@ -1859,7 +2147,7 @@ function TimelineView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
 
       {withoutDate.length > 0 && (
         <div className="rounded-2xl p-4" style={{ background: C.surfaceSunk }}>
-          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>Sem prazo definido</div>
+          <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: C.inkSoft }}>{t("Sem prazo definido")}</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">{withoutDate.map((t) => <TaskCard key={t.id} task={t} {...cardHandlers} />)}</div>
         </div>
       )}
@@ -1872,7 +2160,7 @@ function TimelineView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
             return (
               <div key={g.key} className="relative mb-6">
                 <div className="absolute -left-6 top-0.5 w-3.5 h-3.5 rounded-full border-2" style={{ background: overdueDay ? C.danger : C.primary, borderColor: C.surface }} />
-                <div className="text-sm font-bold mb-2 capitalize" style={{ color: overdueDay ? C.danger : C.ink }}>{g.date.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "short" })}</div>
+                <div className="text-sm font-bold mb-2 capitalize" style={{ color: overdueDay ? C.danger : C.ink }}>{g.date.toLocaleDateString(locale(), { weekday: "short", day: "2-digit", month: "short" })}</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">{sortByPriority(g.tasks).map((t) => <TaskCard key={t.id} task={t} {...cardHandlers} />)}</div>
               </div>
             );
@@ -1883,16 +2171,16 @@ function TimelineView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
   );
 }
 
-function BackupView({ tasks, onImport }) {
+function BackupView({ tasks, health, onImport, onImportHealth }) {
   const fileRef = useRef(null);
   const [msg, setMsg] = useState("");
 
   const exportBackup = () => {
-    const json = JSON.stringify({ app: "Vivaro", version: 2, exportedAt: new Date().toISOString(), tasks }, null, 2);
+    const json = JSON.stringify({ app: "Vivaro", version: 3, exportedAt: new Date().toISOString(), tasks, health }, null, 2);
     if (isNative) {
       nativeShareFile(`vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`, { text: json })
-        .then(() => setMsg("Backup pronto: escolha onde guardar (Drive, Ficheiros, e-mail…)."))
-        .catch(() => setMsg("Não foi possível exportar o backup."));
+        .then(() => setMsg(t("Backup pronto: escolha onde guardar (Drive, Ficheiros, e-mail…).")))
+        .catch(() => setMsg(t("Não foi possível exportar o backup.")));
       return;
     }
     const blob = new Blob([json], { type: "application/json" });
@@ -1900,7 +2188,7 @@ function BackupView({ tasks, onImport }) {
     const a = document.createElement("a");
     a.href = url; a.download = `vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
     URL.revokeObjectURL(url);
-    setMsg("Backup exportado com sucesso.");
+    setMsg(t("Backup exportado com sucesso."));
   };
 
   const handleImportFile = (e) => {
@@ -1913,9 +2201,10 @@ function BackupView({ tasks, onImport }) {
         const imported = Array.isArray(data) ? data : data.tasks;
         if (!Array.isArray(imported)) throw new Error("formato inválido");
         onImport(imported);
-        setMsg(`${imported.length} tarefas importadas com sucesso.`);
+        if (!Array.isArray(data) && data.health && onImportHealth) onImportHealth(data.health);
+        setMsg(t("{n} tarefas importadas com sucesso.", { n: imported.length }));
       } catch (err) {
-        setMsg("Não foi possível ler o arquivo de backup. Verifique o formato.");
+        setMsg(t("Não foi possível ler o arquivo de backup. Verifique o formato."));
       }
     };
     reader.readAsText(file);
@@ -1925,14 +2214,14 @@ function BackupView({ tasks, onImport }) {
   return (
     <div className="max-w-xl space-y-4">
       <div className="rounded-2xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-        <div className="flex items-center gap-2 mb-1"><Download size={18} color={C.primary} /><h3 className="font-bold" style={{ color: C.ink }}>Exportar backup</h3></div>
-        <p className="text-sm mb-3" style={{ color: C.inkSoft }}>Gere um arquivo .json com todas as suas tarefas, prazos, lembretes, subtarefas, comentários e anexos. Guarde-o em local seguro.</p>
-        <button onClick={exportBackup} className="px-4 py-2.5 rounded-xl font-semibold text-sm text-white" style={{ background: C.primary }}>Exportar tarefas ({tasks.length})</button>
+        <div className="flex items-center gap-2 mb-1"><Download size={18} color={C.primary} /><h3 className="font-bold" style={{ color: C.ink }}>{t("Exportar backup")}</h3></div>
+        <p className="text-sm mb-3" style={{ color: C.inkSoft }}>{t("Gere um arquivo .json com todas as suas tarefas, prazos, lembretes, subtarefas, comentários e anexos. Guarde-o em local seguro.")}</p>
+        <button onClick={exportBackup} className="px-4 py-2.5 rounded-xl font-semibold text-sm text-white" style={{ background: C.primary }}>{t("Exportar tarefas (")}{tasks.length})</button>
       </div>
       <div className="rounded-2xl p-5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-        <div className="flex items-center gap-2 mb-1"><Upload size={18} color={C.accent} /><h3 className="font-bold" style={{ color: C.ink }}>Restaurar backup</h3></div>
-        <p className="text-sm mb-3" style={{ color: C.inkSoft }}>Importe um arquivo .json exportado anteriormente. As tarefas importadas serão adicionadas às atuais.</p>
-        <button onClick={() => fileRef.current?.click()} className="px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: C.border, color: C.ink }}>Selecionar arquivo de backup</button>
+        <div className="flex items-center gap-2 mb-1"><Upload size={18} color={C.accent} /><h3 className="font-bold" style={{ color: C.ink }}>{t("Restaurar backup")}</h3></div>
+        <p className="text-sm mb-3" style={{ color: C.inkSoft }}>{t("Importe um arquivo .json exportado anteriormente. As tarefas importadas serão adicionadas às atuais.")}</p>
+        <button onClick={() => fileRef.current?.click()} className="px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: C.border, color: C.ink }}>{t("Selecionar arquivo de backup")}</button>
         <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={handleImportFile} />
       </div>
       {msg && <div className="text-sm font-medium px-4 py-3 rounded-xl" style={{ background: C.primarySoft, color: C.primaryDark }}>{msg}</div>}
@@ -1965,6 +2254,10 @@ export default function App() {
   const [showNativeSettings, setShowNativeSettings] = useState(false);
   const [nativeInfo, setNativeInfo] = useState({ notifications: true, exactAlarms: true, batteryExempt: true, keepAlive: false, sdk: 0 });
   const [flash, setFlash] = useState("");
+  const [lang, setLangState] = useState(() => detectLang());
+  const [moduleId, setModuleId] = useState("tarefas");
+  const [health, setHealth] = useState(loadHealth);
+  const [waterPrompt, setWaterPrompt] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installVariant, setInstallVariant] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(true);
@@ -2080,8 +2373,8 @@ export default function App() {
             firedRemindersRef.current.add(key);
             changed = true;
             setToasts((prev) => [...prev, { id: uid(), task }]);
-            fireNotification(`Lembrete: ${task.title}`, {
-              body: `Prazo ${fmtDate(task.dueAt)}${fmtTime(task.dueAt) ? ` · ${fmtTime(task.dueAt)}` : ""}`.trim(),
+            fireNotification(`${t("Lembrete:")} ${task.title}`, {
+              body: t("Prazo {when}", { when: `${fmtDate(task.dueAt)}${fmtTime(task.dueAt) ? ` · ${fmtTime(task.dueAt)}` : ""}`.trim() }),
               icon: `${BASE}icon-192.png`,
               badge: `${BASE}icon-192.png`,
               tag: key,
@@ -2162,6 +2455,58 @@ export default function App() {
     setModalTask(null);
   }, []);
 
+  /* ---------------- Saúde / Hidratação ---------------- */
+  useEffect(() => {
+    try { localStorage.setItem(HEALTH_KEY, JSON.stringify(health)); } catch (e) { /* ignore */ }
+  }, [health]);
+
+  const updateHydration = useCallback((patch) => setHealth((h) => ({ ...h, hydration: { ...h.hydration, ...patch } })), []);
+  const addWater = useCallback((ml, atIso, silent) => {
+    const entry = { id: uid(), at: atIso || new Date().toISOString(), ml: Math.round(ml) };
+    setHealth((h) => ({ ...h, hydration: { ...h.hydration, log: [...h.hydration.log, entry].slice(-800) } }));
+    setWaterPrompt(null);
+    if (!silent) { setFlash(t("Registado: {n} ml", { n: entry.ml })); setTimeout(() => setFlash(""), 2500); }
+  }, []);
+  const removeWater = useCallback((id) => setHealth((h) => ({ ...h, hydration: { ...h.hydration, log: h.hydration.log.filter((e) => e.id !== id) } })), []);
+  const importHealth = useCallback((incoming) => {
+    if (!incoming || !incoming.hydration) return;
+    setHealth((h) => {
+      const seen = new Set(h.hydration.log.map((e) => e.id));
+      const extra = (incoming.hydration.log || []).filter((e) => e && e.id && !seen.has(e.id));
+      return { ...h, hydration: { ...h.hydration, ...incoming.hydration, log: [...h.hydration.log, ...extra].slice(-800) } };
+    });
+  }, []);
+  const changeLang = useCallback((code) => {
+    setLang(code);
+    setLangState(code);
+    try { localStorage.setItem("vivaro:lang", code); } catch (e) { /* ignore */ }
+  }, []);
+
+  // Versão web: cartão com as quantidades quando chega a hora (só com o Vivaro aberto)
+  useEffect(() => {
+    if (isNative || !loaded || !health.hydration.remindersOn) return;
+    const KEY = "vivaro:waterFired";
+    const check = () => {
+      const hy = health.hydration;
+      const nowMs = Date.now();
+      if (totalForDay(hy.log, new Date()) >= hy.goalMl) return;
+      let fired = [];
+      try { fired = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { /* ignore */ }
+      const slot = hydrationSlots(hy, 1).find((d) => nowMs >= d.getTime() && nowMs < d.getTime() + 15 * 60000 && !fired.includes(d.getTime()));
+      if (!slot) return;
+      try { localStorage.setItem(KEY, JSON.stringify([...fired.filter((x) => x > nowMs - 2 * 86400000), slot.getTime()])); } catch (e) { /* ignore */ }
+      let idx = 0;
+      try { idx = parseInt(localStorage.getItem("vivaro:tipIdx") || "0", 10) || 0; localStorage.setItem("vivaro:tipIdx", String(idx + 1)); } catch (e) { /* ignore */ }
+      const tips = hydrationTips();
+      const tip = tips[idx % tips.length];
+      setWaterPrompt({ id: slot.getTime(), tip });
+      fireNotification(t("Hora de beber água 💧"), { body: `💡 ${tip}`, icon: `${BASE}icon-192.png`, badge: `${BASE}icon-192.png`, tag: `hyd:${slot.getTime()}` });
+    };
+    check();
+    const iv = setInterval(check, 30000);
+    return () => clearInterval(iv);
+  }, [health.hydration, loaded, fireNotification]);
+
   /* ---------------- Android nativo: estado, sincronização e ações das notificações ---------------- */
   const refreshNative = useCallback(async () => {
     if (!isNative) return;
@@ -2188,36 +2533,62 @@ export default function App() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [refreshNative]);
 
+  // Hidratação no Android: o próprio Android repete os lembretes (dias, horário e frequência), mesmo com a app fechada
+  useEffect(() => {
+    if (!isNative || !loaded) return;
+    const hy = health.hydration;
+    const toMin = (v, fb) => { const [h, m] = String(v || "").split(":").map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : fb; };
+    nativeSetWater({
+      enabled: !!hy.remindersOn,
+      days: hy.days,
+      startMin: toMin(hy.start, 480),
+      endMin: toMin(hy.end, 1320),
+      intervalMin: hy.intervalMin,
+      amounts: hy.amounts,
+      goalMl: hy.goalMl,
+      todayMl: totalForDay(hy.log, new Date()),
+      dateKey: dayKey(new Date()),
+      tips: hydrationTips(),
+      title: t("Hora de beber água 💧"),
+      question: t("Quanto bebeu? Toque numa quantidade para registar."),
+    });
+  }, [health.hydration, loaded, lang]);
+
   // Envia ao Android a lista de lembretes sempre que as tarefas mudam
   useEffect(() => {
     if (!isNative || !loaded) return;
     const now = Date.now();
     const items = [];
     const activeIds = [];
+    const nativeLabels = { snooze10: t("Adiar 10 min"), snooze60: t("Adiar 1 h"), done: t("Concluir"), stop: t("Parar") };
     tasks.forEach((task) => {
       if (task.status === "concluido" || task.status === "cancelado") return;
       activeIds.push(task.id);
       if (!task.dueAt) return;
       const dueMs = new Date(task.dueAt).getTime();
-      const due = `Prazo ${fmtDate(task.dueAt)}${fmtTime(task.dueAt) ? ` · ${fmtTime(task.dueAt)}` : ""}`.trim();
+      const due = t("Prazo {when}", { when: `${fmtDate(task.dueAt)}${fmtTime(task.dueAt) ? ` · ${fmtTime(task.dueAt)}` : ""}`.trim() });
       const alarm = !!task.alarmMode;
       (task.reminders || []).forEach((r) => {
         const at = dueMs - (r.value || 0) * (REMINDER_MS[r.unit] || REMINDER_MS.hours);
-        if (at > now) items.push({ key: `${task.id}:${r.id}`, taskId: task.id, title: `${alarm ? "⏰ " : "Lembrete: "}${task.title}`, body: due, at, alarm });
+        if (at > now) items.push({ key: `${task.id}:${r.id}`, taskId: task.id, title: `${alarm ? "⏰ " : `${t("Lembrete:")} `}${task.title}`, body: due, at, alarm, labels: nativeLabels });
       });
       if (alarm && dueMs > now) {
-        items.push({ key: `${task.id}:due`, taskId: task.id, title: `⏰ ${task.title}`, body: due, at: dueMs, alarm: true });
+        items.push({ key: `${task.id}:due`, taskId: task.id, title: `⏰ ${task.title}`, body: due, at: dueMs, alarm: true, labels: nativeLabels });
       }
     });
     items.sort((a, b) => a.at - b.at);
     nativeSyncReminders(items.slice(0, 400), activeIds);
-  }, [tasks, loaded]);
+  }, [tasks, loaded, lang]);
 
   // Botão "Concluir" da notificação (e outras ações guardadas enquanto a app estava fechada)
   const drainNativeActions = useCallback(async () => {
     const actions = await nativeDrainActions();
-    actions.forEach((a) => { if (a && a.type === "done" && a.taskId) changeStatus(a.taskId, "concluido"); });
-  }, [changeStatus]);
+    actions.forEach((a) => {
+      if (!a) return;
+      if (a.type === "done" && a.taskId) changeStatus(a.taskId, "concluido");
+      if (a.type === "water" && a.ml > 0) addWater(a.ml, a.at ? new Date(a.at).toISOString() : undefined, true);
+    });
+  }, [changeStatus, addWater]);
 
   useEffect(() => {
     if (!isNative || !loaded) return;
@@ -2249,7 +2620,7 @@ export default function App() {
           await nativeSetClockAlarm(d.getHours(), d.getMinutes(), task.title);
           done = [...done.slice(-200), k];
           try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) { /* ignore */ }
-          setFlash(`Alarme criado na app Relógio às ${fmtTime(task.dueAt)}`);
+          setFlash(t("Alarme criado na app Relógio às {time}", { time: fmtTime(task.dueAt) }));
           setTimeout(() => setFlash(""), 4000);
         } catch (e) { /* app Relógio indisponível: o despertador do Vivaro continua a valer */ }
       }
@@ -2263,16 +2634,16 @@ export default function App() {
   const cardHandlers = { onEdit: setModalTask, onDelete: deleteTask, onStatusChange: changeStatus, onExport: exportGCal, onOpenAttachment: openAttachment };
 
   const NAV = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "kanban", label: "Kanban", icon: Columns3 },
-    { id: "lista", label: "Lista", icon: ListIcon },
-    { id: "calendario", label: "Calendário", icon: CalendarIcon },
-    { id: "timeline", label: "Timeline", icon: Milestone },
-    { id: "backup", label: "Backup", icon: DatabaseBackup },
+    { id: "dashboard", get label() { return t("Dashboard"); }, icon: LayoutDashboard },
+    { id: "kanban", get label() { return t("Kanban"); }, icon: Columns3 },
+    { id: "lista", get label() { return t("Lista"); }, icon: ListIcon },
+    { id: "calendario", get label() { return t("Calendário"); }, icon: CalendarIcon },
+    { id: "timeline", get label() { return t("Timeline"); }, icon: Milestone },
+    { id: "backup", get label() { return t("Backup"); }, icon: DatabaseBackup },
   ];
 
   return (
-    <div className="min-h-screen w-full" style={{ ...cssVarsFor(theme), background: C.bg, color: C.ink, fontFamily: "'Inter', sans-serif", colorScheme: theme }}>
+    <div key={lang} className="min-h-screen w-full" style={{ ...cssVarsFor(theme), background: C.bg, color: C.ink, fontFamily: "'Inter', sans-serif", colorScheme: theme }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
         * { box-sizing: border-box; }
@@ -2285,14 +2656,14 @@ export default function App() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <img
-              src={`${BASE}logo.png`} alt="Vivaro" title="Sobre o Vivaro" onClick={() => setShowAbout(true)}
+              src={`${BASE}logo.png`} alt={t("Vivaro")} title={t("Sobre o Vivaro")} onClick={() => setShowAbout(true)}
               className="w-9 h-9 rounded-xl object-contain cursor-pointer" style={{ background: C.surfaceSunk }}
             />
-            <span className="font-bold text-lg" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>Vivaro</span>
+            <span className="font-bold text-lg" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{t("Vivaro")}</span>
             <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
 
-          <div className="hidden md:flex items-center gap-1 rounded-xl p-1 overflow-x-auto" style={{ background: C.surfaceSunk }}>
+          <div className={`hidden md:flex items-center gap-1 rounded-xl p-1 overflow-x-auto${moduleId !== "tarefas" ? " !hidden" : ""}`} style={{ background: C.surfaceSunk }}>
             {NAV.map((n) => (
               <button key={n.id} onClick={() => setView(n.id)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all whitespace-nowrap"
                 style={{ background: view === n.id ? C.surface : "transparent", color: view === n.id ? C.primary : C.inkSoft, boxShadow: view === n.id ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>
@@ -2302,21 +2673,19 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowAIChat(true)} title="Perguntar sobre tarefas" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold text-sm" style={{ background: C.surfaceSunk, color: C.ink }}>
-              <Bot size={16} /> <span className="hidden sm:inline">IA</span>
+            <button onClick={() => setShowAIChat(true)} title={t("Perguntar sobre tarefas")} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold text-sm" style={{ background: C.surfaceSunk, color: C.ink }}>
+              <Bot size={16} /> <span className="hidden sm:inline">{t("IA")}</span>
             </button>
-            <VoiceCaptureButton onResult={handleVoiceResult} />
-            {isNative && (
-              <button onClick={() => setShowNativeSettings(true)} title="Lembretes e alarmes" className="inline-flex items-center px-2.5 py-2 rounded-xl" style={{ background: C.surfaceSunk, color: C.ink }}>
-                <Settings size={16} />
-              </button>
-            )}
-            <button onClick={() => setModalTask(null)} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-semibold text-sm text-white" style={{ background: C.accent }}>
-              <Plus size={16} /> <span className="hidden sm:inline">Nova tarefa</span>
+            {moduleId === "tarefas" && <VoiceCaptureButton onResult={handleVoiceResult} />}
+            <button onClick={() => setShowNativeSettings(true)} title={t("Definições")} className="inline-flex items-center px-2.5 py-2 rounded-xl" style={{ background: C.surfaceSunk, color: C.ink }}>
+              <Settings size={16} />
             </button>
+            {moduleId === "tarefas" && <button onClick={() => setModalTask(null)} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-semibold text-sm text-white" style={{ background: C.accent }}>
+              <Plus size={16} /> <span className="hidden sm:inline">{t("Nova tarefa")}</span>
+            </button>}
           </div>
         </div>
-        <div className="md:hidden flex items-center gap-1 px-4 pb-3 overflow-x-auto">
+        <div className={`md:hidden flex items-center gap-1 px-4 pb-3 overflow-x-auto${moduleId !== "tarefas" ? " !hidden" : ""}`}>
           {NAV.map((n) => (
             <button key={n.id} onClick={() => setView(n.id)} className="flex-shrink-0 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap"
               style={{ background: view === n.id ? C.primarySoft : C.surfaceSunk, color: view === n.id ? C.primary : C.inkSoft }}>
@@ -2340,13 +2709,14 @@ export default function App() {
         onDismiss={() => setShowNotifBanner(false)}
       />
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5">
-        {view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {view === "calendario" && <CalendarView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {view === "timeline" && <TimelineView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {view === "backup" && <BackupView tasks={tasks} onImport={importTasks} />}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
+        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} />}
+        {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
+        {moduleId === "tarefas" && view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
+        {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
+        {moduleId === "tarefas" && view === "calendario" && <CalendarView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
+        {moduleId === "tarefas" && view === "timeline" && <TimelineView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
+        {moduleId === "tarefas" && view === "backup" && <BackupView tasks={tasks} health={health} onImport={importTasks} onImportHealth={importHealth} />}
       </div>
 
       {modalTask !== undefined && (
@@ -2355,7 +2725,7 @@ export default function App() {
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
       {noteViewer && <NoteViewer note={noteViewer} onClose={() => setNoteViewer(null)} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
-      {showNativeSettings && <NativeSettingsModal status={nativeInfo} onRefresh={refreshNative} onClose={() => setShowNativeSettings(false)} />}
+      {showNativeSettings && <SettingsModal status={nativeInfo} onRefresh={refreshNative} onClose={() => setShowNativeSettings(false)} lang={lang} onLang={changeLang} />}
       {flash && (
         <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-xl text-sm font-semibold shadow-lg" style={{ background: C.primary, color: "#fff" }}>{flash}</div>
       )}
@@ -2369,6 +2739,8 @@ export default function App() {
           onClose={() => setShowAIChat(false)}
         />
       )}
+      {waterPrompt && <WaterPrompt tip={waterPrompt.tip} amounts={health.hydration.amounts} onPick={(ml) => addWater(ml)} onLater={() => setWaterPrompt(null)} />}
+      <BottomNav module={moduleId} onChange={setModuleId} />
       <ReminderToasts toasts={toasts} onDismiss={dismissToast} onExport={exportGCal} />
     </div>
   );

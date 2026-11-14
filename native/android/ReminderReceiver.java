@@ -16,7 +16,8 @@ public class ReminderReceiver extends BroadcastReceiver {
 
         try {
             if (VivaroCore.ACTION_FIRE.equals(action)) {
-                VivaroCore.showNotification(c, intent);
+                if ("water".equals(intent.getStringExtra("kind"))) VivaroCore.onWaterFire(c, intent);
+                else VivaroCore.showNotification(c, intent);
 
             } else if (VivaroCore.ACTION_SNOOZE.equals(action)) {
                 int minutes = intent.getIntExtra("minutes", 10);
@@ -27,6 +28,9 @@ public class ReminderReceiver extends BroadcastReceiver {
                 it.put("title", intent.getStringExtra("title"));
                 it.put("body", intent.getStringExtra("body"));
                 it.put("alarm", intent.getBooleanExtra("alarm", false));
+                JSONObject lb = new JSONObject();
+                for (String k : VivaroCore.LABEL_KEYS) lb.put(k, intent.getStringExtra(k) == null ? "" : intent.getStringExtra(k));
+                it.put("labels", lb);
                 it.put("at", System.currentTimeMillis() + minutes * 60_000L);
                 VivaroCore.addSnoozed(c, it);
 
@@ -41,6 +45,16 @@ public class ReminderReceiver extends BroadcastReceiver {
                     VivaroCore.addPending(c, a);
                     VivaroNativePlugin.emitPending();
                 }
+
+            } else if (VivaroCore.ACTION_WATER.equals(action)) {
+                VivaroCore.dismissNotification(c, key);
+                JSONObject a = new JSONObject();
+                a.put("type", "water");
+                a.put("ml", intent.getIntExtra("minutes", 0));
+                VivaroCore.addWaterIntake(c, intent.getIntExtra("minutes", 0));
+                a.put("at", System.currentTimeMillis());
+                VivaroCore.addPending(c, a);
+                VivaroNativePlugin.emitPending();
 
             } else if (VivaroCore.ACTION_STOP.equals(action)) {
                 VivaroCore.dismissNotification(c, key);

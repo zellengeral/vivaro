@@ -49,6 +49,22 @@ npm run dev
 - Responsável/observadores/comentários funcionam localmente (sem contas de usuário reais); a estrutura de dados já está pronta para, no futuro, virar colaboração multiusuário de verdade com um backend.
 - Recorrência gera a próxima ocorrência automaticamente quando a tarefa atual é marcada como "Concluído".
 
+## Assistente de IA (perguntar sobre tarefas)
+
+O botão "IA" no topo abre um chat onde você pode perguntar coisas como "o que tenho pra fazer essa semana?", pedir ajuda de verdade para resolver uma tarefa (ex.: "como resolvo a tarefa X", usando conhecimento geral, não só os dados salvos), ou pedir para ele **agir por você**: "cria uma tarefa pra amanhã às 10 sobre X", "marca a tarefa Y como concluída", "muda o prazo da tarefa Z pra sexta", "exclui a tarefa W". A IA executa a ação de verdade (cria/edita/conclui/exclui a tarefa) e confirma no chat o que fez. Usa a API gratuita do Google Gemini, chamada diretamente do navegador (sem servidor/backend).
+
+**Configuração (uma vez só):**
+1. Acesse `aistudio.google.com`, entre com uma conta Google e gere uma chave de API gratuita (não pede cartão de crédito).
+2. **Restrinja a chave por domínio** (importante, para ninguém mais conseguir usá-la): acesse `console.cloud.google.com` → APIs & Services → Credentials → edite a chave → em "Restrições de aplicativo" escolha "Referenciadores HTTP (sites)" e adicione o domínio do seu site publicado no Netlify (ex.: `https://seu-site.netlify.app/*`).
+3. No Netlify: **Site settings → Environment variables → Add a variable** → nome `VITE_GEMINI_API_KEY`, valor a chave gerada.
+4. Dispare um novo deploy (Netlify → Deploys → Trigger deploy) para a chave ser incluída no build.
+
+Para testar localmente, copie `.env.example` para `.env.local` e preencha com sua chave — esse arquivo não é enviado ao Git.
+
+**Sobre a segurança:** como o Vivaro é um site estático, a chave fica embutida no JavaScript compilado do site (não no código-fonte enviado ao GitHub). A restrição por domínio é a proteção recomendada pelo próprio Google para esse cenário — impede que a chave seja usada em outro site, mesmo que alguém a encontre no navegador. Como é conta gratuita sem cobrança, o pior cenário é sua cota diária gratuita ser consumida por terceiros, sem risco financeiro.
+
+**Limite gratuito:** até 1.500 perguntas por dia no modelo usado (`gemini-2.5-flash`) — mais que suficiente para uso pessoal.
+
 ## Notificações de lembrete
 
 - Ao abrir o app, ele pede permissão para enviar notificações do navegador. É preciso clicar em "Ativar" no aviso que aparece no topo (ou permitir quando o navegador perguntar).
@@ -59,3 +75,32 @@ npm run dev
 - **Importante:** como o Vivaro não tem servidor por trás (é um site estático), os lembretes só disparam **enquanto o app estiver aberto ou tiver sido usado recentemente em segundo plano**. Se o sistema encerrar o app por completo (ex.: depois de muito tempo sem uso, ou reinício do celular), a checagem para até você abrir o app de novo. Não é um push notification real de servidor — para isso, seria necessário adicionar um backend (ver observação abaixo).
 - Mesmo sem a permissão do navegador concedida, os lembretes também aparecem como um aviso dentro do próprio app (canto inferior direito), enquanto o app estiver aberto.
 - Se as notificações não aparecerem: (1) confira se a permissão foi concedida; (2) confira se as notificações do site/app não estão bloqueadas nas configurações do celular; (3) confira se a tarefa tem prazo (data/hora) definido — sem prazo, o lembrete não tem uma hora de referência para disparar.
+
+---
+
+## APK Android (notificações nativas, alarmes e despertador)
+
+O mesmo código gera duas versões: o site (ptisp, `npm run build`) e o APK (GitHub Actions).
+
+### Gerar o APK
+1. No GitHub, em **Settings → Secrets and variables → Actions → New repository secret**, crie `GEMINI_API_KEY` com a sua chave do Gemini (uma só vez).
+2. Envie as alterações para o GitHub (`git push`).
+3. Separador **Actions → Gerar APK do Vivaro → Run workflow**.
+4. Quando terminar (±6–10 min), abra a execução e descarregue **vivaro-apk** (zip com `vivaro.apk`).
+5. Instale o `vivaro.apk` no telemóvel (permita "instalar de fontes desconhecidas"). As versões seguintes instalam por cima, sem desinstalar, porque a assinatura é fixa (`native/vivaro-debug.keystore`).
+
+### O que o APK faz a mais que o site
+- Lembretes nativos com alarme exato (funcionam com a app fechada e ecrã bloqueado) e reagendados após reiniciar o telemóvel.
+- Botões na notificação: **Adiar 10 min**, **Adiar 1 h**, **Concluir**.
+- Por tarefa: **Despertador** (som de alarme que repete até dispensar) e opção de criar também um alarme na app Relógio.
+- Serviço discreto em segundo plano, ecrã ⚙ "Lembretes e alarmes" (permissões, bateria, testes).
+- Voz nativa (microfone) e exportação de backup pela folha de partilha.
+
+### Notas
+- Os dados do APK são independentes dos do site: use **Backup** para os passar de um para o outro.
+- O Android pode exigir que desative a otimização de bateria do Vivaro (o ecrã ⚙ leva-o lá).
+
+### Menu de módulos, Saúde e idiomas (v1.2)
+- Menu fixo no rodapé com scroll horizontal (Tarefas, Saúde). Para acrescentar um módulo, adicione uma linha em `MODULES` no `App.jsx`.
+- Saúde → Hidratação: botão ligar/desligar, dias da semana, início e fim dos alertas, frequência, meta diária e 3 quantidades rápidas (200/300/400 ml). No APK o próprio Android repete os lembretes (sem limite de dias) e cada notificação traz uma curiosidade diferente sobre hidratação, com botões de quantidade.
+- Definições (⚙): idioma (EN, PT, ES, DE, FR, JA, ZH, SV, NL, PL, RU). Textos em `src/i18n.js`.

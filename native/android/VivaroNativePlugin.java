@@ -172,6 +172,33 @@ public class VivaroNativePlugin extends Plugin {
         }
     }
 
+    /** Guarda a configuração de hidratação e agenda o próximo lembrete (o Android continua a cadeia sozinho). */
+    @PluginMethod
+    public void setWaterSchedule(PluginCall call) {
+        Context c = getContext();
+        VivaroCore.prefs(c).edit().putString("water", call.getData().toString()).apply();
+        VivaroCore.scheduleNextWater(c);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void testWater(PluginCall call) {
+        try {
+            JSONObject it = new JSONObject();
+            it.put("key", "hyd:test-" + System.currentTimeMillis());
+            it.put("taskId", "__water");
+            it.put("kind", "water");
+            it.put("title", "");
+            it.put("body", "");
+            it.put("alarm", false);
+            it.put("at", System.currentTimeMillis() + 5000);
+            VivaroCore.schedule(getContext(), it);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Falha ao criar o teste");
+        }
+    }
+
     @PluginMethod
     public void getPendingActions(PluginCall call) {
         Context c = getContext();

@@ -19,7 +19,9 @@ import androidx.core.content.ContextCompat;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.Calendar;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 
 /** Lógica comum: agendamento de alarmes, canais e notificações do Vivaro. */
@@ -35,6 +37,7 @@ public final class VivaroCore {
     static final String ACTION_SNOOZE = "pt.zellen.vivaro.SNOOZE";
     static final String ACTION_DONE = "pt.zellen.vivaro.DONE";
     static final String ACTION_STOP = "pt.zellen.vivaro.STOP";
+    static final String ACTION_WATER = "pt.zellen.vivaro.WATER";
 
     static final String SNOOZE_SUFFIX = "#s";
 
@@ -105,6 +108,18 @@ public final class VivaroCore {
         i.putExtra("title", it.optString("title"));
         i.putExtra("body", it.optString("body"));
         i.putExtra("alarm", it.optBoolean("alarm", false));
+        i.putExtra("kind", it.optString("kind", ""));
+        JSONArray am = it.optJSONArray("amounts");
+        for (int n = 0; n < 3; n++) i.putExtra("a" + n, am != null ? am.optInt(n, 0) : 0);
+        JSONObject lb = it.optJSONObject("labels");
+        for (String k : LABEL_KEYS) i.putExtra(k, lb != null ? lb.optString(k, "") : "");
+    }
+
+    static final String[] LABEL_KEYS = {"snooze10", "snooze60", "done", "stop"};
+
+    static String label(Intent src, String k, String def) {
+        String v = src.getStringExtra(k);
+        return (v == null || v.isEmpty()) ? def : v;
     }
 
     private static PendingIntent firePending(Context c, JSONObject it) {
@@ -243,6 +258,9 @@ public final class VivaroCore {
         i.putExtra("title", src.getStringExtra("title"));
         i.putExtra("body", src.getStringExtra("body"));
         i.putExtra("alarm", src.getBooleanExtra("alarm", false));
+        i.putExtra("kind", src.getStringExtra("kind"));
+        for (int n = 0; n < 3; n++) i.putExtra("a" + n, src.getIntExtra("a" + n, 0));
+        for (String k : LABEL_KEYS) i.putExtra(k, src.getStringExtra(k));
         i.putExtra("minutes", minutes);
         int req = (action + minutes + key).hashCode();
         return PendingIntent.getBroadcast(c, req, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -276,18 +294,28 @@ public final class VivaroCore {
                 .setWhen(System.currentTimeMillis())
                 .setContentIntent(content);
 
-        b.addAction(0, "Adiar 10 min", actionPending(c, ACTION_SNOOZE, src, 10));
-        if (alarm) {
-            b.addAction(0, "Concluir", actionPending(c, ACTION_DONE, src, 0));
-            b.addAction(0, "Parar", actionPending(c, ACTION_STOP, src, 0));
+        boolean water = "water".equals(src.getStringExtra("kind"));
+        if (water) {
+            for (int n = 0; n < 3; n++) {
+                int ml = src.getIntExtra("a" + n, 0);
+                if (ml > 0) b.addAction(0, ml + " ml", actionPending(c, ACTION_WATER, src, ml));
+            }
+        } else {
+            b.addAction(0, label(src, "snooze10", "Adiar 10 min"), actionPending(c, ACTION_SNOOZE, src, 10));
+        }
+        if (water) {
+            if (Build.VERSION.SDK_INT < 26) b.setDefaults(Notification.DEFAULT_ALL);
+        } else if (alarm) {
+            b.addAction(0, label(src, "done", "Concluir"), actionPending(c, ACTION_DONE, src, 0));
+            b.addAction(0, label(src, "stop", "Parar"), actionPending(c, ACTION_STOP, src, 0));
             b.setTimeoutAfter(5 * 60 * 1000L);
             if (Build.VERSION.SDK_INT < 26) {
                 b.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), android.media.AudioManager.STREAM_ALARM);
                 b.setVibrate(new long[]{0, 600, 300, 600});
             }
         } else {
-            b.addAction(0, "Adiar 1 h", actionPending(c, ACTION_SNOOZE, src, 60));
-            b.addAction(0, "Concluir", actionPending(c, ACTION_DONE, src, 0));
+            b.addAction(0, label(src, "snooze60", "Adiar 1 h"), actionPending(c, ACTION_SNOOZE, src, 60));
+            b.addAction(0, label(src, "done", "Concluir"), actionPending(c, ACTION_DONE, src, 0));
             if (Build.VERSION.SDK_INT < 26) b.setDefaults(Notification.DEFAULT_ALL);
         }
 
@@ -306,6 +334,131 @@ public final class VivaroCore {
     static void dismissNotification(Context c, String key) {
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) nm.cancel(notifId(key));
+    }
+
+    /* ------------------------ hidratação (agendamento recorrente) ------------------------ */
+
+    static final String WATER_KEY = "hyd:next";
+
+    static JSONObject waterCfg(Context c) {
+        try {
+            return new JSONObject(prefs(c).getString("water", "{}"));
+        } catch (Exception e) {
+            return new JSONObject();
+        }
+    }
+
+    static String todayKey() {
+        Calendar x = Calendar.getInstance();
+        return String.format(Locale.US, "%04d-%02d-%02d", x.get(Calendar.YEAR), x.get(Calendar.MONTH) + 1, x.get(Calendar.DAY_OF_MONTH));
+    }
+
+    /** Próximo horário de lembrete (ms) depois de `after`, segundo dias da semana, início, fim e intervalo. */
+    static long nextWaterSlot(JSONObject cfg, long after) {
+        JSONArray days = cfg.optJSONArray("days");
+        if (days == null) return -1;
+        boolean[] on = new boolean[7];
+        for (int i = 0; i < days.length(); i++) {
+            int d = days.optInt(i, -1);
+            if (d >= 0 && d < 7) on[d] = true;
+        }
+        int startMin = cfg.optInt("startMin", 480);
+        int endMin = cfg.optInt("endMin", 1320);
+        int step = Math.max(15, cfg.optInt("intervalMin", 120));
+        for (int off = 0; off <= 8; off++) {
+            Calendar base = Calendar.getInstance();
+            base.setTimeInMillis(after);
+            base.set(Calendar.HOUR_OF_DAY, 0);
+            base.set(Calendar.MINUTE, 0);
+            base.set(Calendar.SECOND, 0);
+            base.set(Calendar.MILLISECOND, 0);
+            base.add(Calendar.DAY_OF_YEAR, off);
+            int dow = base.get(Calendar.DAY_OF_WEEK) - 1; // 0 = domingo, como no JavaScript
+            if (!on[dow]) continue;
+            for (int m = startMin; m <= endMin; m += step) {
+                Calendar t = (Calendar) base.clone();
+                t.add(Calendar.MINUTE, m);
+                long ms = t.getTimeInMillis();
+                if (ms > after) return ms;
+            }
+        }
+        return -1;
+    }
+
+    static void cancelWater(Context c) {
+        try {
+            JSONObject it = new JSONObject();
+            it.put("key", WATER_KEY);
+            cancel(c, it);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Agenda (só) o próximo lembrete de água; a cadeia continua sozinha a cada disparo, mesmo com a app fechada. */
+    static void scheduleNextWater(Context c) {
+        cancelWater(c);
+        try {
+            JSONObject cfg = waterCfg(c);
+            if (!cfg.optBoolean("enabled", false)) return;
+            long at = nextWaterSlot(cfg, System.currentTimeMillis());
+            if (at < 0) return;
+            JSONObject it = new JSONObject();
+            it.put("key", WATER_KEY);
+            it.put("taskId", "__water");
+            it.put("kind", "water");
+            it.put("at", at);
+            it.put("title", "");
+            it.put("body", "");
+            it.put("alarm", false);
+            schedule(c, it);
+        } catch (Exception ignored) {
+        }
+    }
+
+    static void addWaterIntake(Context c, int ml) {
+        try {
+            JSONObject cfg = waterCfg(c);
+            String today = todayKey();
+            int total = today.equals(cfg.optString("dateKey")) ? cfg.optInt("todayMl", 0) : 0;
+            cfg.put("dateKey", today);
+            cfg.put("todayMl", total + ml);
+            prefs(c).edit().putString("water", cfg.toString()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Disparo de um lembrete de água: agenda o seguinte, escolhe uma curiosidade e mostra a notificação. */
+    static void onWaterFire(Context c, Intent src) {
+        try {
+            String key = src.getStringExtra("key");
+            boolean test = key != null && key.startsWith("hyd:test");
+            JSONObject cfg = waterCfg(c);
+            if (!test) {
+                if (!cfg.optBoolean("enabled", false)) return;
+                scheduleNextWater(c);
+                boolean reached = todayKey().equals(cfg.optString("dateKey"))
+                        && cfg.optInt("todayMl", 0) >= cfg.optInt("goalMl", Integer.MAX_VALUE);
+                if (reached) return;
+            }
+            JSONArray tips = cfg.optJSONArray("tips");
+            String tip = "";
+            int idx = prefs(c).getInt("tipIdx", 0);
+            if (tips != null && tips.length() > 0) {
+                tip = tips.optString(idx % tips.length());
+                prefs(c).edit().putInt("tipIdx", idx + 1).apply();
+            }
+            String question = cfg.optString("question", "");
+            Intent i = new Intent();
+            i.putExtra("key", test ? key : WATER_KEY);
+            i.putExtra("taskId", "__water");
+            i.putExtra("kind", "water");
+            i.putExtra("title", cfg.optString("title", "Vivaro"));
+            i.putExtra("body", (tip.isEmpty() ? "" : "\uD83D\uDCA1 " + tip + "\n\n") + question);
+            JSONArray am = cfg.optJSONArray("amounts");
+            for (int n = 0; n < 3; n++) i.putExtra("a" + n, am != null ? am.optInt(n, 0) : 0);
+            showNotification(c, i);
+        } catch (Exception ignored) {
+        }
     }
 
     /* ------------------------ serviço em segundo plano ------------------------ */
