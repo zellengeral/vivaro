@@ -6,7 +6,7 @@ import {
   Download, Upload, Briefcase, User, GripVertical,
   Mic, Repeat, FileText, Link2, StickyNote, MapPin, MessageSquare,
   Paperclip, ChevronLeft, ChevronRight, Milestone,
-  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck, HeartPulse, Droplets, Globe, Wallet,
+  List as ListIcon, Calendar as CalendarIcon, Sun, Moon, BellRing, BellOff, Sparkles, Smartphone, Bot, Send, Settings, AlarmClock, ShieldCheck, HeartPulse, Droplets, Globe, Wallet, Target,
 } from "lucide-react";
 import {
   isNative, nativeStatus, nativeRequestNotifications, nativeOpenNotificationSettings, nativeOpenExactAlarmSettings,
@@ -14,8 +14,10 @@ import {
   nativeOnAction, nativeSetClockAlarm, nativeListen, nativeShareFile, nativeSetWater, nativeTestWater,
 } from "./native.js";
 import FinanceView from "./Finance.jsx";
+import GoalsView from "./Goals.jsx";
+import { GOALS_KEY, normalizeGoals, mergeGoals } from "./goalsLogic.js";
 import { WellnessSub, SUBMODULES, normalizeHx, mergeHx } from "./Wellness.jsx";
-import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance, addTransaction, todayISO } from "./financeLogic.js";
+import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance, addTransaction, todayISO, isoOf } from "./financeLogic.js";
 import { LANGS, t, setLang, detectLang, locale, voiceLang, langInfo, hydrationTips } from "./i18n.js";
 
 setLang(detectLang());
@@ -335,29 +337,32 @@ const GEMINI_MODEL_CANDIDATES = ["gemini-3.1-flash-lite", "gemini-flash-latest",
 let workingGeminiModel = (() => { try { return localStorage.getItem("vivaro:geminiModel") || null; } catch (e) { return null; } })();
 
 // Desliga/minimiza o "raciocínio" interno do modelo: é o que mais atrasa respostas simples (10–15 s)
-function thinkingFor(model) {
-  if (/2\.5/.test(model)) return { thinkingBudget: 0 };
-  if (/gemini-3|flash-latest/.test(model)) return { thinkingLevel: "minimal" };
+function thinkingFor(model, think = false) {
+  if (/2\.5/.test(model)) return { thinkingBudget: think ? 1024 : 0 };
+  if (/gemini-3|flash-latest/.test(model)) return { thinkingLevel: think ? "low" : "minimal" };
   return null;
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function callGeminiOnce(prompt, model, useThinking = true) {
-  const thinking = useThinking ? thinkingFor(model) : null;
+// opts: { schema (responseSchema do Gemini), system (instrução de sistema), maxTokens, think }
+async function callGeminiOnce(prompt, model, useThinking = true, opts = {}) {
+  const thinking = useThinking ? thinkingFor(model, opts.think) : null;
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.4, maxOutputTokens: 1500, ...(thinking ? { thinkingConfig: thinking } : {}) },
+        generationConfig: { responseMimeType: "application/json", ...(opts.schema ? { responseSchema: opts.schema } : {}), temperature: 0.4, maxOutputTokens: opts.maxTokens || 1500, ...(thinking ? { thinkingConfig: thinking } : {}) },
       }),
     }
   );
   if (!res.ok) {
-    if (res.status === 400 && thinking) return callGeminiOnce(prompt, model, false); // modelo não aceita esta opção
+    if (res.status === 400 && thinking) return callGeminiOnce(prompt, model, false, opts); // modelo não aceita esta opção
+    if (res.status === 400 && opts.schema) return callGeminiOnce(prompt, model, false, { ...opts, schema: null }); // sem schema: o prompt garante o formato
     if (res.status === 429) {
       const err = new Error("Limite de pedidos do Gemini atingido no momento (pode ser o limite por minuto — geralmente libera rápido). Tente de novo em instantes; se persistir, pode ser o limite diário gratuito.");
       err.retryable = true;
@@ -383,10 +388,10 @@ async function callGeminiOnce(prompt, model, useThinking = true) {
 }
 
 // Tenta um modelo específico, com retry automático em erros transitórios (429/503).
-async function callWithRetry(prompt, model) {
+async function callWithRetry(prompt, model, opts = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await callGeminiOnce(prompt, model);
+      return await callGeminiOnce(prompt, model, true, opts);
     } catch (err) {
       const delays = err.retryDelays || [];
       if (err.retryable && attempt < delays.length) {
@@ -396,6 +401,70 @@ async function callWithRetry(prompt, model) {
       throw err;
     }
   }
+}
+
+// Percorre os modelos candidatos (o que já funcionou primeiro), com retry em erros transitórios.
+async function generateWithFallback(prompt, opts = {}) {
+  if (!GEMINI_API_KEY) throw new Error("A chave da API do Gemini ainda não foi configurada nesta implantação.");
+  const candidates = workingGeminiModel
+    ? [workingGeminiModel, ...GEMINI_MODEL_CANDIDATES.filter((m) => m !== workingGeminiModel)]
+    : GEMINI_MODEL_CANDIDATES;
+  let lastErr = null;
+  for (const model of candidates) {
+    try {
+      const raw = await callWithRetry(prompt, model, opts);
+      workingGeminiModel = model;
+      try { localStorage.setItem("vivaro:geminiModel", model); } catch (e) { /* ignore */ }
+      return raw;
+    } catch (err) {
+      lastErr = err;
+      if (err.modelNotFound) { if (model === workingGeminiModel) { workingGeminiModel = null; try { localStorage.removeItem("vivaro:geminiModel"); } catch (e) { /* ignore */ } } continue; }
+      throw err; // erro real (limite, permissão, etc.) — não adianta trocar de modelo
+    }
+  }
+  throw new Error("Nenhum modelo de IA disponível no momento (todos retornaram 404). Avise para eu atualizar a lista de modelos.");
+}
+
+// ---------- Objetivos: engenharia reversa (Goal-Backward Planning) com saída estruturada ----------
+const GOAL_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    summary: { type: "STRING" },
+    processes: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          title: { type: "STRING" }, description: { type: "STRING" }, endOffsetDays: { type: "INTEGER" },
+          actions: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, dueOffsetDays: { type: "INTEGER" } }, required: ["title", "dueOffsetDays"] } },
+        },
+        required: ["title", "description", "endOffsetDays", "actions"],
+      },
+    },
+  },
+  required: ["processes"],
+};
+
+async function structureGoal({ title, context, deadline, area }) {
+  const daysTotal = deadline ? Math.max(7, Math.round((new Date(`${deadline}T12:00:00`) - Date.now()) / 86400000)) : 90;
+  const system = `És um planeador especialista em Engenharia Reversa (Goal-Backward Planning). Recebes um OBJETIVO FINAL e trabalhas de trás para a frente: 1) define o estado final; 2) identifica 3 a 7 PROCESSOS/MARCOS, por ordem cronológica, em que cada um é condição necessária para o seguinte; 3) para cada processo, 2 a 6 AÇÕES práticas, pequenas, concretas e mensuráveis (começam por um verbo, têm resultado verificável). Regras: não inventes factos sobre o utilizador; não repitas ações; "endOffsetDays" e "dueOffsetDays" são dias a contar de HOJE, inteiros crescentes e nunca superiores ao prazo total de ${daysTotal} dias; a última ação do último processo conclui o objetivo. Escreve todos os textos em ${langInfo().ai}. Responde apenas com JSON conforme o esquema.`;
+  const prompt = `OBJETIVO FINAL: ${title}\nÁREA: ${area === "profissional" ? "profissional" : "pessoal"}\nPRAZO TOTAL: ${daysTotal} dias${deadline ? ` (até ${deadline})` : " (sugerido)"}\nCONTEXTO DO UTILIZADOR: ${context || "(nenhum)"}\nData de hoje: ${new Date().toISOString().slice(0, 10)}`;
+  const raw = await generateWithFallback(prompt, { system, schema: GOAL_SCHEMA, maxTokens: 4000, think: true });
+  let data = null;
+  try { data = JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) {
+    const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
+    if (a !== -1 && b > a) { try { data = JSON.parse(raw.slice(a, b + 1)); } catch (e2) { /* ignore */ } }
+  }
+  if (!data || !Array.isArray(data.processes) || !data.processes.length) throw new Error("A IA não devolveu uma estrutura válida. Tente novamente.");
+  const base = new Date(); base.setHours(12, 0, 0, 0);
+  const toDate = (off) => { const d = new Date(base); d.setDate(d.getDate() + Math.max(0, Math.min(daysTotal, Number(off) || 0))); return isoOf(d); };
+  return {
+    summary: typeof data.summary === "string" ? data.summary : "",
+    processes: data.processes.slice(0, 10).map((p) => ({
+      id: uid(), title: String(p.title || "").trim(), description: String(p.description || "").trim(), dueDate: toDate(p.endOffsetDays), weight: 1,
+      actions: (Array.isArray(p.actions) ? p.actions : []).slice(0, 10).filter((a) => a && a.title).map((a) => ({ id: uid(), title: String(a.title).trim(), dueDate: toDate(a.dueOffsetDays), done: false, taskId: null })),
+    })).filter((p) => p.title),
+  };
 }
 
 // Pergunta ao Gemini e devolve { reply, actions } — actions são comandos que o
@@ -436,30 +505,7 @@ ${buildTasksContext(tasks)}
 
 PERGUNTA: ${question}`;
 
-  // Tenta o modelo que já funcionou antes primeiro (se houver), depois percorre
-  // a lista de candidatos — cada um com retry automático em erros transitórios.
-  const candidates = workingGeminiModel
-    ? [workingGeminiModel, ...GEMINI_MODEL_CANDIDATES.filter((m) => m !== workingGeminiModel)]
-    : GEMINI_MODEL_CANDIDATES;
-
-  let raw = "";
-  let lastErr = null;
-  for (const model of candidates) {
-    try {
-      raw = await callWithRetry(prompt, model);
-      workingGeminiModel = model;
-      try { localStorage.setItem("vivaro:geminiModel", model); } catch (e) { /* ignore */ }
-      lastErr = null;
-      break;
-    } catch (err) {
-      lastErr = err;
-      if (err.modelNotFound) { if (model === workingGeminiModel) { workingGeminiModel = null; try { localStorage.removeItem("vivaro:geminiModel"); } catch (e) { /* ignore */ } } continue; }
-      throw err; // erro real (limite, permissão, etc.) — não adianta trocar de modelo
-    }
-  }
-  if (lastErr) {
-    throw new Error("Nenhum modelo de IA disponível no momento (todos retornaram 404). Avise para eu atualizar a lista de modelos.");
-  }
+  const raw = await generateWithFallback(prompt);
 
   return parseAIResponse(raw);
 }
@@ -1260,6 +1306,7 @@ function ReminderToasts({ toasts, onDismiss, onExport }) {
 /* ------------------------------------------------------------------ */
 const MODULES = [
   { id: "tarefas", get label() { return t("Tarefas"); }, icon: LayoutDashboard },
+  { id: "objetivos", get label() { return t("Objetivos"); }, icon: Target },
   { id: "financas", get label() { return t("Finanças"); }, icon: Wallet },
   { id: "saude", get label() { return t("Saúde"); }, icon: HeartPulse },
   // Novos módulos: basta acrescentar uma linha aqui e tratar o id no App.
@@ -2196,12 +2243,12 @@ function TimelineView({ tasks, filters, setFilters, activeQuadrant, ...cardHandl
   );
 }
 
-function BackupView({ tasks, health, finance, onImport, onImportHealth, onImportFinance }) {
+function BackupView({ tasks, health, finance, goals, onImport, onImportHealth, onImportFinance, onImportGoals }) {
   const fileRef = useRef(null);
   const [msg, setMsg] = useState("");
 
   const exportBackup = () => {
-    const json = JSON.stringify({ app: "Vivaro", version: 4, exportedAt: new Date().toISOString(), tasks, health, finance }, null, 2);
+    const json = JSON.stringify({ app: "Vivaro", version: 5, exportedAt: new Date().toISOString(), tasks, health, finance, goals }, null, 2);
     if (isNative) {
       nativeShareFile(`vivaro-backup-${new Date().toISOString().slice(0, 10)}.json`, { text: json })
         .then(() => setMsg(t("Backup pronto: escolha onde guardar (Drive, Ficheiros, e-mail…).")))
@@ -2228,6 +2275,7 @@ function BackupView({ tasks, health, finance, onImport, onImportHealth, onImport
         onImport(imported);
         if (!Array.isArray(data) && data.health && onImportHealth) onImportHealth(data.health);
         if (!Array.isArray(data) && data.finance && onImportFinance) onImportFinance(data.finance);
+        if (!Array.isArray(data) && data.goals && onImportGoals) onImportGoals(data.goals);
         setMsg(t("{n} tarefas importadas com sucesso.", { n: imported.length }));
       } catch (err) {
         setMsg(t("Não foi possível ler o arquivo de backup. Verifique o formato."));
@@ -2283,6 +2331,9 @@ export default function App() {
   const [lang, setLangState] = useState(() => detectLang());
   const [moduleId, setModuleId] = useState("tarefas");
   const [health, setHealth] = useState(loadHealth);
+  const [goals, setGoals] = useState(() => {
+    try { return normalizeGoals(JSON.parse(localStorage.getItem(GOALS_KEY) || "[]")); } catch (e) { return []; }
+  });
   const [finance, setFinance] = useState(() => {
     try { return normalizeFinance(JSON.parse(localStorage.getItem(FIN_KEY) || "null")); } catch (e) { return emptyFinance(); }
   });
@@ -2488,6 +2539,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(HEALTH_KEY, JSON.stringify(health)); } catch (e) { /* ignore */ }
   }, [health]);
+
+  /* ---------------- Objetivos ---------------- */
+  useEffect(() => {
+    try { localStorage.setItem(GOALS_KEY, JSON.stringify(goals)); } catch (e) { /* ignore */ }
+  }, [goals]);
+  const importGoals = useCallback((incoming) => setGoals((g) => mergeGoals(g, incoming)), []);
 
   /* ---------------- Finanças ---------------- */
   useEffect(() => {
@@ -2752,6 +2809,7 @@ export default function App() {
       />
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
+        {moduleId === "objetivos" && <GoalsView goals={goals} setGoals={setGoals} tasks={tasks} onCreateTask={addTaskDirect} onStructure={structureGoal} aiAvailable={!!GEMINI_API_KEY} />}
         {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
         {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
@@ -2759,7 +2817,7 @@ export default function App() {
         {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "calendario" && <CalendarView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "timeline" && <TimelineView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
-        {moduleId === "tarefas" && view === "backup" && <BackupView tasks={tasks} health={health} finance={finance} onImport={importTasks} onImportHealth={importHealth} onImportFinance={importFinance} />}
+        {moduleId === "tarefas" && view === "backup" && <BackupView tasks={tasks} health={health} finance={finance} goals={goals} onImport={importTasks} onImportHealth={importHealth} onImportFinance={importFinance} onImportGoals={importGoals} />}
       </div>
 
       {modalTask !== undefined && (
