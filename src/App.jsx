@@ -15,6 +15,7 @@ import {
 } from "./native.js";
 import FinanceView from "./Finance.jsx";
 import GoalsView from "./Goals.jsx";
+import { sanitizeLink, applyLink } from "./bridge.js";
 import { GOALS_KEY, normalizeGoals, mergeGoals } from "./goalsLogic.js";
 import { WellnessSub, SUBMODULES, normalizeHx, mergeHx } from "./Wellness.jsx";
 import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance, addTransaction, todayISO, isoOf } from "./financeLogic.js";
@@ -425,6 +426,46 @@ async function generateWithFallback(prompt, opts = {}) {
   throw new Error("Nenhum modelo de IA disponível no momento (todos retornaram 404). Avise para eu atualizar a lista de modelos.");
 }
 
+// ---------- Plano de cardápio (ligação Objetivos → Nutrição) ----------
+const MEAL_SCHEMA = {
+  type: "OBJECT",
+  properties: { days: { type: "ARRAY", items: { type: "OBJECT", properties: { day: { type: "INTEGER" }, meals: { type: "ARRAY", items: { type: "OBJECT", properties: { slot: { type: "STRING", enum: ["breakfast", "lunch", "snack", "dinner"] }, name: { type: "STRING" }, kcal: { type: "INTEGER" } }, required: ["slot", "name", "kcal"] } } }, required: ["day", "meals"] } } },
+  required: ["days"],
+};
+async function generateMealPlan({ kcalTarget, days, note }) {
+  const system = `És um assistente de planeamento alimentar. Cria um cardápio de ${days} dias, saudável, variado, simples de cozinhar e com ingredientes comuns, em ${langInfo().ai}. Cada dia tem 4 refeições (breakfast, lunch, snack, dinner) cuja soma de calorias fica a ±5% de ${kcalTarget} kcal. Nomes curtos (máx. 8 palavras), sem repetir o mesmo prato principal em dias consecutivos. Não dês conselhos médicos. Responde só com JSON conforme o esquema.`;
+  const raw = await generateWithFallback(`META: ${kcalTarget} kcal/dia\nDIAS: ${days}\nPREFERÊNCIAS/NOTAS: ${note || "(nenhuma)"}`, { system, schema: MEAL_SCHEMA, maxTokens: 12000 });
+  let data = null;
+  try { data = JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) { const a = raw.indexOf("{"), b = raw.lastIndexOf("}"); if (a !== -1 && b > a) { try { data = JSON.parse(raw.slice(a, b + 1)); } catch (e2) { /* ignore */ } } }
+  if (!data || !Array.isArray(data.days) || !data.days.length) throw new Error("A IA não devolveu um plano válido. Tente novamente.");
+  const base = new Date(); base.setHours(12, 0, 0, 0);
+  return {
+    id: uid(), createdAt: new Date().toISOString(), kcalTarget,
+    days: data.days.slice(0, days).map((d, i) => { const dt = new Date(base); dt.setDate(dt.getDate() + i); return { date: isoOf(dt), meals: (Array.isArray(d.meals) ? d.meals : []).map((m) => ({ slot: m.slot, name: String(m.name || "").trim(), kcal: Math.round(Number(m.kcal) || 0) })).filter((m) => m.name) }; }),
+  };
+}
+
+// ---------- Estruturar tarefa com IA (subtarefas, prioridade, prazo sugerido) ----------
+const TASK_SCHEMA = {
+  type: "OBJECT",
+  properties: { description: { type: "STRING" }, quadrant: { type: "INTEGER" }, dueInDays: { type: "INTEGER" }, subtasks: { type: "ARRAY", items: { type: "STRING" } }, reminderHoursBefore: { type: "INTEGER" } },
+  required: ["subtasks", "quadrant"],
+};
+async function structureTask({ title, description, category }) {
+  const system = `Transformas uma tarefa vaga numa tarefa executável. Devolve: 3 a 8 subtarefas pequenas, concretas e por ordem de execução (começam por um verbo); uma descrição curta (1–2 frases) só se a tarefa ainda não tiver; "quadrant" pela matriz de Eisenhower (1 urgente+importante, 2 importante, 3 urgente, 4 nenhum); "dueInDays" (dias a partir de hoje) realista, ou 0 se não houver urgência clara; "reminderHoursBefore" (horas) opcional. Escreve em ${langInfo().ai}. Não inventes factos. Responde só com JSON conforme o esquema.`;
+  const raw = await generateWithFallback(`TAREFA: ${title}\nDESCRIÇÃO: ${description || "(vazia)"}\nÁREA: ${category || "pessoal"}\nHoje: ${new Date().toISOString().slice(0, 10)}`, { system, schema: TASK_SCHEMA, maxTokens: 1500 });
+  let data = null;
+  try { data = JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) { const a = raw.indexOf("{"), b = raw.lastIndexOf("}"); if (a !== -1 && b > a) { try { data = JSON.parse(raw.slice(a, b + 1)); } catch (e2) { /* ignore */ } } }
+  if (!data || !Array.isArray(data.subtasks) || !data.subtasks.length) throw new Error("A IA não devolveu uma estrutura válida. Tente novamente.");
+  return {
+    description: typeof data.description === "string" ? data.description.trim() : "",
+    quadrant: [1, 2, 3, 4].includes(Number(data.quadrant)) ? Number(data.quadrant) : 2,
+    dueInDays: Math.max(0, Math.min(365, Math.round(Number(data.dueInDays) || 0))),
+    reminderHoursBefore: Math.max(0, Math.min(168, Math.round(Number(data.reminderHoursBefore) || 0))),
+    subtasks: data.subtasks.slice(0, 8).map((x) => String(x).trim()).filter(Boolean),
+  };
+}
+
 // ---------- Objetivos: engenharia reversa (Goal-Backward Planning) com saída estruturada ----------
 const GOAL_SCHEMA = {
   type: "OBJECT",
@@ -436,7 +477,16 @@ const GOAL_SCHEMA = {
         type: "OBJECT",
         properties: {
           title: { type: "STRING" }, description: { type: "STRING" }, endOffsetDays: { type: "INTEGER" },
-          actions: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, dueOffsetDays: { type: "INTEGER" } }, required: ["title", "dueOffsetDays"] } },
+          actions: { type: "ARRAY", items: { type: "OBJECT", properties: {
+            title: { type: "STRING" }, dueOffsetDays: { type: "INTEGER" },
+            link: { type: "OBJECT", properties: {
+              module_target: { type: "STRING", enum: ["saude_hidratacao", "saude_nutricao", "financas_despesa", "financas_orcamento", "financas_meta", "tarefas"] },
+              action_type: { type: "STRING", enum: ["set_daily_goal", "meal_plan", "planned_expense", "set_budget", "create_savings_goal", "recurring_task"] },
+              payload_data: { type: "OBJECT", properties: {
+                goalMl: { type: "INTEGER" }, kcalTarget: { type: "INTEGER" }, days: { type: "INTEGER" }, amount: { type: "NUMBER" }, name: { type: "STRING" },
+                category: { type: "STRING" }, dateOffsetDays: { type: "INTEGER" }, every: { type: "STRING", enum: ["daily", "weekly", "monthly"] }, note: { type: "STRING" } } },
+            }, required: ["module_target", "action_type", "payload_data"] },
+          }, required: ["title", "dueOffsetDays"] } },
         },
         required: ["title", "description", "endOffsetDays", "actions"],
       },
@@ -447,7 +497,9 @@ const GOAL_SCHEMA = {
 
 async function structureGoal({ title, context, deadline, area }) {
   const daysTotal = deadline ? Math.max(7, Math.round((new Date(`${deadline}T12:00:00`) - Date.now()) / 86400000)) : 90;
-  const system = `És um planeador especialista em Engenharia Reversa (Goal-Backward Planning). Recebes um OBJETIVO FINAL e trabalhas de trás para a frente: 1) define o estado final; 2) identifica 3 a 7 PROCESSOS/MARCOS, por ordem cronológica, em que cada um é condição necessária para o seguinte; 3) para cada processo, 2 a 6 AÇÕES práticas, pequenas, concretas e mensuráveis (começam por um verbo, têm resultado verificável). Regras: não inventes factos sobre o utilizador; não repitas ações; "endOffsetDays" e "dueOffsetDays" são dias a contar de HOJE, inteiros crescentes e nunca superiores ao prazo total de ${daysTotal} dias; a última ação do último processo conclui o objetivo. Escreve todos os textos em ${langInfo().ai}. Responde apenas com JSON conforme o esquema.`;
+  const system = `És um planeador especialista em Engenharia Reversa (Goal-Backward Planning). Recebes um OBJETIVO FINAL e trabalhas de trás para a frente: 1) define o estado final; 2) identifica 3 a 7 PROCESSOS/MARCOS, por ordem cronológica, em que cada um é condição necessária para o seguinte; 3) para cada processo, 2 a 6 AÇÕES práticas, pequenas, concretas e mensuráveis (começam por um verbo, têm resultado verificável). Regras: não inventes factos sobre o utilizador; não repitas ações; "endOffsetDays" e "dueOffsetDays" são dias a contar de HOJE, inteiros crescentes e nunca superiores ao prazo total de ${daysTotal} dias; a última ação do último processo conclui o objetivo.
+
+LIGAÇÕES ENTRE MÓDULOS (campo opcional "link" numa ação; no máximo 1 por ação; só quando faz mesmo sentido, nunca para todas): módulos e ações permitidas — saude_hidratacao/set_daily_goal {goalMl}: meta diária de água em ml; saude_nutricao/meal_plan {kcalTarget, days, note}: plano de cardápio de 7 a 30 dias com meta calórica diária (nunca abaixo de 1200 kcal; sem défices extremos; não substitui um nutricionista); financas_despesa/planned_expense {amount, name, category, dateOffsetDays}: despesa prevista (valor na moeda do utilizador); financas_orcamento/set_budget {category, amount}: teto mensal numa categoria (Alimentação, Casa, Transporte, Saúde, Lazer, Educação, Compras); financas_meta/create_savings_goal {name, amount, dateOffsetDays}: cofrinho; tarefas/recurring_task {name, every, note}: hábito repetido (daily, weekly, monthly). Preenche só os campos do payload_data usados por essa ação e usa valores realistas; se nenhuma ligação servir, omite "link". Escreve todos os textos em ${langInfo().ai}. Responde apenas com JSON conforme o esquema.`;
   const prompt = `OBJETIVO FINAL: ${title}\nÁREA: ${area === "profissional" ? "profissional" : "pessoal"}\nPRAZO TOTAL: ${daysTotal} dias${deadline ? ` (até ${deadline})` : " (sugerido)"}\nCONTEXTO DO UTILIZADOR: ${context || "(nenhum)"}\nData de hoje: ${new Date().toISOString().slice(0, 10)}`;
   const raw = await generateWithFallback(prompt, { system, schema: GOAL_SCHEMA, maxTokens: 4000, think: true });
   let data = null;
@@ -462,7 +514,7 @@ async function structureGoal({ title, context, deadline, area }) {
     summary: typeof data.summary === "string" ? data.summary : "",
     processes: data.processes.slice(0, 10).map((p) => ({
       id: uid(), title: String(p.title || "").trim(), description: String(p.description || "").trim(), dueDate: toDate(p.endOffsetDays), weight: 1,
-      actions: (Array.isArray(p.actions) ? p.actions : []).slice(0, 10).filter((a) => a && a.title).map((a) => ({ id: uid(), title: String(a.title).trim(), dueDate: toDate(a.dueOffsetDays), done: false, taskId: null })),
+      actions: (Array.isArray(p.actions) ? p.actions : []).slice(0, 10).filter((a) => a && a.title).map((a) => ({ id: uid(), title: String(a.title).trim(), dueDate: toDate(a.dueOffsetDays), done: false, taskId: null, link: sanitizeLink(a.link) })),
     })).filter((p) => p.title),
   };
 }
@@ -1789,7 +1841,9 @@ function DictateFieldButton({ onText, title = "Ditar por voz" }) {
 /* ------------------------------------------------------------------ */
 /*  Task Form Modal                                                    */
 /* ------------------------------------------------------------------ */
-function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment }) {
+function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment, onStructure }) {
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMsg, setAiMsg] = useState("");
   const blank = {
     id: null, title: "", description: "", category: "pessoal",
     quadrant: 2, status: "pendente", dueDate: "", dueTime: "",
@@ -1807,6 +1861,23 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
   });
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const structureWithAI = async () => {
+    if (!form.title.trim() || aiBusy) return;
+    setAiBusy(true); setAiMsg("");
+    try {
+      const r = await onStructure({ title: form.title.trim(), description: form.description, category: form.category });
+      setForm((f) => {
+        const next = { ...f, quadrant: r.quadrant, subtasks: [...f.subtasks, ...r.subtasks.map((x) => ({ id: uid(), title: x, done: false }))] };
+        if (!f.description.trim() && r.description) next.description = r.description;
+        if (!f.dueDate && r.dueInDays > 0) { const d = new Date(); d.setDate(d.getDate() + r.dueInDays); next.dueDate = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+        if (r.reminderHoursBefore > 0 && next.dueDate && !f.reminders.length) next.reminders = [{ id: uid(), value: r.reminderHoursBefore, unit: "hours" }];
+        return next;
+      });
+      setAiMsg(t("{n} subtarefas sugeridas — reveja e ajuste antes de guardar.", { n: r.subtasks.length }));
+    } catch (e) { setAiMsg(e.message || t("Não foi possível estruturar com a IA.")); }
+    setAiBusy(false);
+  };
 
   const addReminder = () => update("reminders", [...form.reminders, { id: uid(), value: 1, unit: "hours" }]);
   const updateReminder = (id, patch) => update("reminders", form.reminders.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -1851,6 +1922,14 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment })
             <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Título")}</label>
             <input autoFocus value={form.title} onChange={(e) => update("title", e.target.value)} placeholder={t("Ex: Finalizar relatório mensal")}
               className="w-full mt-1.5 px-3 py-2.5 rounded-xl outline-none border text-[15px]" style={{ borderColor: C.border, color: C.ink }} />
+            {onStructure && GEMINI_API_KEY && (
+              <div className="mt-2">
+                <button type="button" onClick={structureWithAI} disabled={!form.title.trim() || aiBusy} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg disabled:opacity-40" style={{ background: C.primarySoft, color: C.primary }}>
+                  <Sparkles size={13} />{aiBusy ? t("A estruturar…") : t("Estruturar tarefa com IA")}
+                </button>
+                {aiMsg && <div className="text-xs mt-1.5" style={{ color: C.inkSoft }}>{aiMsg}</div>}
+              </div>
+            )}
           </div>
 
           <div>
@@ -2565,6 +2644,11 @@ export default function App() {
     if (!silent) { setFlash(t("Registado: {n} ml", { n: entry.ml })); setTimeout(() => setFlash(""), 2500); }
   }, []);
   const removeWater = useCallback((id) => setHealth((h) => ({ ...h, hydration: { ...h.hydration, log: h.hydration.log.filter((e) => e.id !== id) } })), []);
+  const financeRef = useRef(finance);
+  financeRef.current = finance;
+  const bridgeApply = useCallback((link) => applyLink({ finance: financeRef.current, setFinance, setHealth, updateHydration, createTask: addTaskDirect, generateMealPlan }, link), [updateHydration, addTaskDirect]);
+  const bridgeNavigate = useCallback((moduleId) => setModuleId(moduleId), []);
+
   const importHealth = useCallback((incoming) => {
     if (!incoming) return;
     setHealth((h) => mergeHx(h, incoming));
@@ -2809,7 +2893,7 @@ export default function App() {
       />
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
-        {moduleId === "objetivos" && <GoalsView goals={goals} setGoals={setGoals} tasks={tasks} onCreateTask={addTaskDirect} onStructure={structureGoal} aiAvailable={!!GEMINI_API_KEY} />}
+        {moduleId === "objetivos" && <GoalsView goals={goals} setGoals={setGoals} tasks={tasks} onCreateTask={addTaskDirect} onStructure={structureGoal} aiAvailable={!!GEMINI_API_KEY} bridge={{ apply: bridgeApply, navigate: bridgeNavigate, currency: finance.currency }} />}
         {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
         {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
@@ -2821,7 +2905,7 @@ export default function App() {
       </div>
 
       {modalTask !== undefined && (
-        <TaskModal initial={modalTask} voicePrefill={voicePrefill} onSave={saveTask} onClose={() => { setModalTask(undefined); setVoicePrefill(null); }} onOpenAttachment={openAttachment} />
+        <TaskModal initial={modalTask} voicePrefill={voicePrefill} onSave={saveTask} onClose={() => { setModalTask(undefined); setVoicePrefill(null); }} onOpenAttachment={openAttachment} onStructure={structureTask} />
       )}
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
       {noteViewer && <NoteViewer note={noteViewer} onClose={() => setNoteViewer(null)} />}

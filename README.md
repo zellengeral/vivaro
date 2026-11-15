@@ -116,3 +116,6 @@ Medicamentos (alertas diários com alarme, histórico de tomas, stock com aviso 
 
 ## v1.6.0 — Objetivos (Goal-Backward Planning)
 Módulo **Objetivos**: objetivo final → processos → ações, "Estruturar com IA" (Gemini com saída JSON estruturada), pré-visualização editável, acordeão com progresso e criação de tarefas a partir das ações. Backup v5 (`goals`). Ver `OBJETIVOS-IA.md`.
+
+## v1.7.0 — Ecossistema (Cross-Module Bridge)
+Ações dos Objetivos podem trazer ligações propostas pela IA (hidratação, cardápio de 30 dias, despesas/orçamento/cofrinho, tarefas repetidas), validadas por lista branca e aplicadas em cadeia ao guardar. "Estruturar tarefa com IA" no editor de tarefas. Ver `ECOSSISTEMA.md`.

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Plus, X, Trash2, ChevronDown, ChevronRight, Target, Sparkles, CalendarPlus, Check, Pencil } from "lucide-react";
 import { t, locale } from "./i18n.js";
 import { Sheet, Field, Btn, Card, Bar, inputCls, inputSt } from "./Finance.jsx";
+import { MODULE_META, LINK_TYPES } from "./bridge.js";
 import { uidG, goalProgress, processProgress, actionDone, goalStats } from "./goalsLogic.js";
 
 const C = new Proxy({}, { get: (_, k) => `var(--v-${String(k)})` });
@@ -18,12 +19,59 @@ function taskFromAction(goal, proc, a) {
   };
 }
 
-export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStructure, aiAvailable, _test }) {
+// Chip de ligação entre módulos ("Cross-Module Bridge")
+function LinkChip({ link, cur, mode, busy, onToggle, onApply, onGo, onRemove }) {
+  const def = LINK_TYPES[link.key]; if (!def) return null;
+  const meta = MODULE_META[def.module] || {};
+  const text = `${t(def.title)}: ${def.describe(link.payload_data, cur)}`;
+  const base = "inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg max-w-full";
+  if (link.status === "applied")
+    return <button onClick={onGo} className={base} style={{ background: C.primarySoft, color: C.primary }} title={t("Abrir módulo")}>✓ {meta.emoji} {t(meta.label)} · <span className="font-normal truncate">{text}</span></button>;
+  if (mode === "draft")
+    return (
+      <span className="inline-flex items-center gap-1 max-w-full">
+        <button onClick={onToggle} className={base} style={{ background: link.accepted ? C.primarySoft : C.surfaceSunk, color: link.accepted ? C.primary : C.inkSoft, border: `1px dashed ${link.accepted ? C.primary : C.border}` }}>
+          <span>{link.accepted ? "☑" : "☐"}</span> 🔗 {meta.emoji} {t(meta.label)} · <span className="font-normal truncate">{text}</span>
+        </button>
+        <button onClick={onRemove} style={{ color: C.inkSoft }} aria-label={t("Apagar")}><X size={13} /></button>
+      </span>
+    );
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <button disabled={busy} onClick={onApply} className={`${base} disabled:opacity-50`} style={{ background: C.surfaceSunk, color: C.primary, border: `1px dashed ${C.primary}` }}>
+        🔗 {meta.emoji} {busy ? t("A ligar…") : `${t("Ligar")} · ${text}`}
+      </button>
+      {link.error && <span className="text-[11px]" style={{ color: C.danger }}>{link.error}</span>}
+    </span>
+  );
+}
+
+export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStructure, aiAvailable, bridge, _test }) {
   const [openId, setOpenId] = useState(_test?.openId || null);
   const [creating, setCreating] = useState(!!_test?.creating);
   const [draft, setDraft] = useState(_test?.draft || null); // {goal, summary, isNew}
   const [open, setOpen] = useState(_test?.open || {}); // processos expandidos
+  const [busyLink, setBusyLink] = useState(null);
   const goal = goals.find((g) => g.id === openId);
+  const cur = bridge?.currency || "EUR";
+
+  // Aplica (em cadeia) as ligações aceites; falhas ficam marcadas, o objetivo grava sempre.
+  const runLinks = async (g, onProgress) => {
+    const todo = g.processes.flatMap((p) => p.actions).filter((a) => a.link && a.link.accepted && a.link.status !== "applied");
+    let n = 0; const result = {};
+    for (const a of todo) {
+      onProgress && onProgress(++n, todo.length);
+      try { const refs = await bridge.apply(a.link); result[a.id] = { ...a.link, status: "applied", refs, error: "", appliedAt: new Date().toISOString() }; }
+      catch (e) { result[a.id] = { ...a.link, status: "failed", error: e.message || "Erro" }; }
+    }
+    return { ...g, processes: g.processes.map((p) => ({ ...p, actions: p.actions.map((a) => (result[a.id] ? { ...a, link: result[a.id] } : a)) })) };
+  };
+  const applyOne = async (g, p, a) => {
+    setBusyLink(a.id);
+    try { const refs = await bridge.apply(a.link); patchGoal(g.id, (x) => ({ ...x, processes: x.processes.map((pp) => (pp.id !== p.id ? pp : { ...pp, actions: pp.actions.map((aa) => (aa.id === a.id ? { ...aa, link: { ...aa.link, status: "applied", refs, error: "" } } : aa)) })) })); }
+    catch (e) { patchGoal(g.id, (x) => ({ ...x, processes: x.processes.map((pp) => (pp.id !== p.id ? pp : { ...pp, actions: pp.actions.map((aa) => (aa.id === a.id ? { ...aa, link: { ...aa.link, status: "failed", error: e.message || "Erro" } } : aa)) })) })); }
+    setBusyLink(null);
+  };
 
   const patchGoal = (id, fn) => setGoals((gs) => gs.map((g) => (g.id === id ? fn(g) : g)));
   const toggleAction = (g, p, a) => patchGoal(g.id, (x) => ({ ...x, processes: x.processes.map((pp) => (pp.id !== p.id ? pp : { ...pp, actions: pp.actions.map((aa) => (aa.id === a.id ? { ...aa, done: !actionDone(aa, tasks) } : aa)) })) }));
@@ -85,7 +133,8 @@ export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStru
                       <div key={a.id} className="flex items-center gap-2.5 py-1.5">
                         <button onClick={() => toggleAction(goal, p, a)} className="w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0" style={{ borderColor: done ? C.primary : C.border, background: done ? C.primary : "transparent" }} aria-label={t("Concluir")}>{done && <Check size={13} color="#fff" />}</button>
                         <div className="flex-1 min-w-0"><div className="text-sm" style={{ color: done ? C.inkSoft : C.ink, textDecoration: done ? "line-through" : "none" }}>{a.title}</div>
-                          {a.dueDate && <div className="text-[11px]" style={{ color: !done && a.dueDate < todayStr() ? C.danger : C.inkSoft }}>{fmt(a.dueDate)}</div>}</div>
+                          {a.dueDate && <div className="text-[11px]" style={{ color: !done && a.dueDate < todayStr() ? C.danger : C.inkSoft }}>{fmt(a.dueDate)}</div>}
+                          {a.link && <div className="mt-1"><LinkChip link={a.link} cur={cur} mode="detail" busy={busyLink === a.id} onApply={() => applyOne(goal, p, a)} onGo={() => bridge.navigate(MODULE_META[LINK_TYPES[a.link.key]?.module]?.nav)} /></div>}</div>
                         {linked ? <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: C.primarySoft, color: C.primary }}>{t("Tarefa")} ✓</span>
                           : !done && <button onClick={() => makeTask(goal, p, a)} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: C.surfaceSunk, color: C.primary }}><CalendarPlus size={12} />{t("Criar tarefa")}</button>}
                       </div>
@@ -100,7 +149,7 @@ export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStru
             </Card>
           );
         })}
-        {draft && <DraftSheet draft={draft} setDraft={setDraft} onStructure={onStructure} aiAvailable={aiAvailable} onSave={(g) => { setGoals((gs) => gs.map((x) => (x.id === g.id ? g : x))); setDraft(null); }} />}
+        {draft && <DraftSheet draft={draft} setDraft={setDraft} onStructure={onStructure} aiAvailable={aiAvailable} cur={cur} runLinks={runLinks} onSave={(g) => { setGoals((gs) => gs.map((x) => (x.id === g.id ? g : x))); setDraft(null); }} />}
       </div>
     );
   }
@@ -129,7 +178,7 @@ export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStru
       })}
       {creating && <NewGoalSheet onClose={() => setCreating(false)} onStructure={onStructure} aiAvailable={aiAvailable}
         onDraft={(d) => { setCreating(false); setDraft(d); }} />}
-      {draft && <DraftSheet draft={draft} setDraft={setDraft} onStructure={onStructure} aiAvailable={aiAvailable} onSave={(g) => { setGoals((gs) => [g, ...gs]); setDraft(null); setOpenId(g.id); }} />}
+      {draft && <DraftSheet draft={draft} setDraft={setDraft} onStructure={onStructure} aiAvailable={aiAvailable} cur={cur} runLinks={runLinks} onSave={(g) => { setGoals((gs) => [g, ...gs]); setDraft(null); setOpenId(g.id); }} />}
     </div>
   );
 }
@@ -162,9 +211,10 @@ function NewGoalSheet({ onClose, onDraft, onStructure, aiAvailable }) {
 }
 
 /* ---------------- 2.º passo: rever / editar antes de gravar ---------------- */
-function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable }) {
+function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable, cur, runLinks }) {
   const g = draft.goal;
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [err, setErr] = useState("");
   const setG = (fn) => setDraft({ ...draft, goal: fn(g) });
   const setP = (pid, fn) => setG((x) => ({ ...x, processes: x.processes.map((p) => (p.id === pid ? fn(p) : p)) }));
@@ -176,6 +226,15 @@ function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable }) {
     setBusy(false);
   };
   const small = "px-2 py-1.5 rounded-lg border text-sm outline-none";
+  const allLinks = g.processes.flatMap((p) => p.actions).map((a) => a.link).filter((l) => l && LINK_TYPES[l.key]);
+  const linkCount = allLinks.length;
+  const accepted = allLinks.filter((l) => l.accepted && l.status !== "applied");
+  const modsTouched = [...new Set(accepted.map((l) => LINK_TYPES[l.key].module))];
+  const save = async () => {
+    let clean = { ...g, title: g.title.trim(), processes: g.processes.filter((p) => p.title.trim()).map((p) => ({ ...p, title: p.title.trim(), actions: p.actions.filter((a) => a.title.trim()).map((a) => ({ ...a, title: a.title.trim() })) })) };
+    if (accepted.length) { setBusy(true); clean = await runLinks(clean, (i, n) => setProgress(`${i}/${n}`)); setBusy(false); setProgress(null); }
+    onSave(clean);
+  };
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" style={{ background: "rgba(28,31,36,0.5)" }}>
       <div className="w-full sm:max-w-lg max-h-[94vh] flex flex-col rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }}>
@@ -187,6 +246,12 @@ function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable }) {
         <div className="overflow-y-auto p-5 space-y-4 flex-1" style={busy ? { opacity: 0.5 } : null}>
           {draft.summary && <div className="text-xs p-3 rounded-xl" style={{ background: C.primarySoft, color: C.primaryDark }}>✨ {draft.summary}</div>}
           {err && <div className="text-sm p-2.5 rounded-xl" style={{ background: C.dangerSoft, color: C.danger }}>{err}</div>}
+          {linkCount > 0 && (
+            <div className="text-xs p-3 rounded-xl" style={{ border: `1px dashed ${C.primary}`, color: C.ink }}>
+              <b>🔗 {t("Ecossistema")}:</b> {t("{n} ligações aceites a {m} módulos serão criadas ao guardar.", { n: accepted.length, m: modsTouched.length })}
+              <div className="mt-1" style={{ color: C.inkSoft }}>{modsTouched.map((m) => `${MODULE_META[m].emoji} ${t(MODULE_META[m].label)}`).join(" · ")}</div>
+            </div>
+          )}
           {g.processes.map((p, i) => (
             <div key={p.id} className="rounded-xl p-3 space-y-2" style={{ border: `1px solid ${C.border}`, background: C.surfaceSunk }}>
               <div className="flex items-center gap-2">
@@ -197,11 +262,14 @@ function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable }) {
               </div>
               <div className="pl-7 space-y-1.5">
                 {p.actions.map((a) => (
-                  <div key={a.id} className="flex items-center gap-2">
+                  <React.Fragment key={a.id}>
+                  <div className="flex items-center gap-2">
                     <input className={`${small} flex-1 min-w-0`} style={inputSt} value={a.title} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, title: e.target.value }))} />
                     <input type="date" className={`${small} w-[8.5rem]`} style={inputSt} value={a.dueDate || ""} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, dueDate: e.target.value }))} />
                     <button onClick={() => setP(p.id, (x) => ({ ...x, actions: x.actions.filter((q) => q.id !== a.id) }))} style={{ color: C.inkSoft }}><X size={15} /></button>
                   </div>
+                  {a.link && <div className="pl-1 -mt-0.5 pb-1"><LinkChip link={a.link} cur={cur} mode="draft" onToggle={() => setA(p.id, a.id, (x) => ({ ...x, link: { ...x.link, accepted: !x.link.accepted } }))} onRemove={() => setA(p.id, a.id, (x) => ({ ...x, link: null }))} /></div>}
+                  </React.Fragment>
                 ))}
                 <button className="text-xs font-semibold" style={{ color: C.primary }} onClick={() => setP(p.id, (x) => ({ ...x, actions: [...x.actions, { id: uidG(), title: "", dueDate: x.dueDate || "", done: false, taskId: null }] }))}>+ {t("Ação")}</button>
               </div>
@@ -212,7 +280,7 @@ function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable }) {
         <div className="px-5 py-4 flex gap-2" style={{ borderTop: `1px solid ${C.border}` }}>
           {aiAvailable && <Btn kind="ghost" disabled={busy} onClick={regenerate}><Sparkles size={14} className="inline mr-1" />{busy ? t("A estruturar…") : t("Regenerar")}</Btn>}
           <div className="flex-1" />
-          <Btn disabled={busy || !g.title.trim()} onClick={() => onSave({ ...g, title: g.title.trim(), processes: g.processes.filter((p) => p.title.trim()).map((p) => ({ ...p, title: p.title.trim(), actions: p.actions.filter((a) => a.title.trim()).map((a) => ({ ...a, title: a.title.trim() })) })) })}>{t("Guardar")}</Btn>
+          <Btn disabled={busy || !g.title.trim()} onClick={save}>{busy && progress ? `${t("A ligar módulos…")} ${progress}` : accepted.length ? `${t("Guardar e ligar")} (${accepted.length})` : t("Guardar")}</Btn>
         </div>
       </div>
     </div>

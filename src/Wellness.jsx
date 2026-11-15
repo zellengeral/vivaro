@@ -18,6 +18,7 @@ export function normalizeHx(h) {
   const out = { ...h };
   HX_KEYS.forEach((k) => { if (!Array.isArray(out[k])) out[k] = []; });
   if (!out.fasting) out.fasting = null; // {startAt,targetH}
+  if (!out.mealPlan) out.mealPlan = null; // {id,kcalTarget,days:[{date,meals:[{slot,name,kcal}]}]}
   return out;
 }
 export function mergeHx(h, inc) {
@@ -27,6 +28,7 @@ export function mergeHx(h, inc) {
     out[k] = [...arr(h, k), ...arr(inc || {}, k).filter((x) => x && x.id && !have.has(x.id))];
   });
   if (!out.fasting && inc && inc.fasting) out.fasting = inc.fasting;
+  if (!out.mealPlan && inc && inc.mealPlan) out.mealPlan = inc.mealPlan;
   return out;
 }
 
@@ -555,8 +557,25 @@ function Meals({ hx, upd, onBack }) {
   const last7 = lastDays(7).map((d) => ({ d, tag: meals.find((m) => m.date === d && m.tag)?.tag }));
   const kcalToday = meals.filter((m) => m.date === day && m.kcal).reduce((s, m) => s + m.kcal, 0);
   const macro = meals.filter((m) => m.date === day).reduce((a, m) => ({ p: a.p + (m.protein || 0), c: a.c + (m.carb || 0), f: a.f + (m.fat || 0) }), { p: 0, c: 0, f: 0 });
+  const plan = hx.mealPlan;
+  const planToday = plan && plan.days.find((d) => d.date === day);
+  const SLOT = { breakfast: "Pequeno-almoço", lunch: "Almoço", snack: "Lanche", dinner: "Jantar" };
+  const [showPlan, setShowPlan] = useState(false);
   return (
     <Page title={t("Refeições e jejum")} onBack={onBack}>
+      {plan && (
+        <Card>
+          <div className="flex items-center justify-between mb-2"><div className="font-bold text-sm" style={{ color: C.ink }}>🍎 {planToday ? t("Cardápio de hoje") : t("Plano de cardápio")}</div><div className="text-xs" style={{ color: C.inkSoft }}>~{plan.kcalTarget} kcal</div></div>
+          {planToday ? planToday.meals.map((m, i) => <div key={i} className="flex justify-between text-sm py-0.5" style={{ color: C.ink }}><span><span className="text-xs" style={{ color: C.inkSoft }}>{t(SLOT[m.slot] || m.slot)} · </span>{m.name}</span><span className="text-xs" style={{ color: C.inkSoft }}>{m.kcal} kcal</span></div>)
+            : <div className="text-xs" style={{ color: C.inkSoft }}>{t("O plano não cobre o dia de hoje.")}</div>}
+          <div className="flex gap-4 mt-2">
+            <button className="text-xs font-semibold" style={{ color: C.primary }} onClick={() => setShowPlan(!showPlan)}>{showPlan ? t("Ocultar plano") : t("Ver plano completo")} ({plan.days.length} {t("dias")})</button>
+            <button className="text-xs font-semibold" style={{ color: C.danger }} onClick={() => upd((h) => ({ ...h, mealPlan: null }))}>{t("Apagar plano")}</button>
+          </div>
+          {showPlan && <div className="mt-3 space-y-2 max-h-72 overflow-y-auto">{plan.days.map((d) => <div key={d.date} className="text-xs" style={{ color: C.inkSoft }}><b style={{ color: C.ink }}>{fmtDay(d.date)}</b> — {d.meals.map((m) => m.name).join(" · ")} ({d.meals.reduce((a, m) => a + m.kcal, 0)} kcal)</div>)}</div>}
+          <div className="text-[11px] mt-2" style={{ color: C.inkSoft }}>{t("Sugestão gerada por IA; não substitui um nutricionista.")}</div>
+        </Card>
+      )}
       <Card>
         <div className="font-bold text-sm mb-3" style={{ color: C.ink }}>{t("Jejum intermitente")}</div>
         {fasting ? (
