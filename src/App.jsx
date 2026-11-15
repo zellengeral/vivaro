@@ -16,6 +16,7 @@ import {
 import FinanceView from "./Finance.jsx";
 import GoalsView from "./Goals.jsx";
 import { sanitizeLink, applyLink } from "./bridge.js";
+import { syncTasks } from "./taskSync.js";
 import { GOALS_KEY, normalizeGoals, mergeGoals } from "./goalsLogic.js";
 import { WellnessSub, SUBMODULES, normalizeHx, mergeHx } from "./Wellness.jsx";
 import { FIN_KEY, normalizeFinance, mergeFinance, emptyFinance, addTransaction, todayISO, isoOf } from "./financeLogic.js";
@@ -1332,15 +1333,17 @@ function CommentsEditor({ comments, onChange }) {
           ))}
         </div>
       )}
-      <div className="flex gap-2">
-        <input value={author} onChange={(e) => setAuthor(e.target.value)} className="w-24 px-2 py-2 rounded-lg border text-xs outline-none" style={{ borderColor: C.border, color: C.ink }} placeholder={t("Nome")} />
-        <input
-          value={text} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
-          className="flex-1 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }}
-          placeholder={t("Escrever um comentário...")}
-        />
-        <button type="button" onClick={add} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: C.primary }}>{t("Enviar")}</button>
+      <div className="space-y-2">
+        <input value={author} onChange={(e) => setAuthor(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-xs outline-none" style={{ borderColor: C.border, color: C.ink }} placeholder={t("Nome")} />
+        <div className="flex gap-2 items-stretch">
+          <input
+            value={text} onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+            className="flex-1 min-w-0 w-0 px-3 py-2 rounded-lg border text-sm outline-none" style={{ borderColor: C.border, color: C.ink }}
+            placeholder={t("Escrever um comentário...")}
+          />
+          <button type="button" onClick={add} className="flex-shrink-0 px-4 py-2 rounded-lg text-sm font-semibold text-white whitespace-nowrap" style={{ background: C.primary }}>{t("Enviar")}</button>
+        </div>
       </div>
     </div>
   );
@@ -1968,18 +1971,19 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment, o
       clockAlarm: !!form.clockAlarm,
       completedAt: form.status === "concluido" ? (form.completedAt || new Date().toISOString()) : null,
       createdAt: form.createdAt || new Date().toISOString(),
+      ...(form.source ? { source: form.source } : {}),
     });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }}>
-      <div className="w-full sm:max-w-lg max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl" style={{ background: C.surface }}>
-        <div className="flex items-center justify-between px-5 py-4 sticky top-0 z-10" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(28,31,36,0.5)" }}>
+      <div className="w-full sm:max-w-lg max-h-[92dvh] max-h-[92vh] flex flex-col rounded-t-2xl sm:rounded-2xl overflow-hidden" style={{ background: C.surface }}>
+        <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
           <h2 className="font-bold text-lg" style={{ color: C.ink, fontFamily: "'Space Grotesk', sans-serif" }}>{initial ? t("Editar tarefa") : t("Nova tarefa")}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:opacity-60" style={{ color: C.inkSoft }}><X size={20} /></button>
         </div>
 
-        <div className="p-5 space-y-5">
+        <div className="p-5 space-y-5 overflow-y-auto flex-1 min-h-0">
           <div>
             <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkSoft }}>{t("Título")}</label>
             <input autoFocus value={form.title} onChange={(e) => update("title", e.target.value)} placeholder={t("Ex: Finalizar relatório mensal")}
@@ -2106,7 +2110,7 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment, o
           </div>
         </div>
 
-        <div className="flex gap-2 px-5 py-4 sticky bottom-0" style={{ background: C.surface, borderTop: `1px solid ${C.border}` }}>
+        <div className="flex gap-2 px-5 py-4 flex-shrink-0" style={{ background: C.surface, borderTop: `1px solid ${C.border}`, paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           <button onClick={onClose} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: C.border, color: C.inkSoft }}>{t("Cancelar")}</button>
           <button onClick={handleSubmit} disabled={!form.title.trim()} className="flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm text-white disabled:opacity-40" style={{ background: C.primary }}>{t("Salvar tarefa")}</button>
         </div>
@@ -2691,6 +2695,11 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(FIN_KEY, JSON.stringify(finance)); } catch (e) { /* ignore */ }
   }, [finance]);
+  // Sincroniza (sem duplicar) as tarefas ligadas a um registo de outro módulo (medicamento, consulta…).
+  // source = {type,id}; desired = [{...tarefa, key, keepDue}]; legacyIds = ids antigos guardados no registo.
+  const syncSourceTasks = useCallback((source, desired, legacyIds = []) => {
+    setTasks((prev) => syncTasks(prev, source, desired, legacyIds, uid));
+  }, []);
   const deleteTasksByIds = useCallback((ids) => { if (ids && ids.length) setTasks((prev) => prev.filter((x) => !ids.includes(x.id))); }, []);
   const addExpense = useCallback((cents, description) => {
     setFinance((f) => (f.accounts.length ? addTransaction(f, { type: "expense", amountCents: cents, date: todayISO(), accountId: f.accounts[0].id, description, categoryId: "c-health" }) : f));
@@ -2957,7 +2966,7 @@ export default function App() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
         {moduleId === "objetivos" && <GoalsView goals={goals} setGoals={setGoals} tasks={tasks} onCreateTask={addTaskDirect} onStructure={structureGoal} aiAvailable={!!GEMINI_API_KEY} bridge={{ apply: bridgeApply, navigate: bridgeNavigate, currency: finance.currency }} />}
         {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
-        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, generateMealPlan, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
+        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, generateMealPlan, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onSyncTasks: syncSourceTasks, onOpenAttachment: openAttachment, addExpense }} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}

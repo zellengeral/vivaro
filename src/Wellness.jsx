@@ -103,7 +103,7 @@ function nextAt(time) {
 const mkTask = (over) => ({ id: uidW(), title: "", description: "", category: "pessoal", quadrant: 1, status: "pendente", dueAt: null, reminders: [], attachments: [], subtasks: [], assignee: "", watchers: [], comments: [], recurrence: null, alarmMode: false, clockAlarm: false, completedAt: null, createdAt: nowISO(), ...over });
 
 /* ------------------------------ 1. Medicamentos ------------------------------ */
-function Meds({ hx, upd, onBack, onCreateTask, onDeleteTasks, addExpense }) {
+function Meds({ hx, upd, onBack, onSyncTasks, addExpense }) {
   const meds = arr(hx, "meds"), log = arr(hx, "medLog");
   const [edit, setEdit] = useState(null); // med | {} novo
   const [restock, setRestock] = useState(null);
@@ -164,19 +164,14 @@ function Meds({ hx, upd, onBack, onCreateTask, onDeleteTasks, addExpense }) {
         </Card>
       )}
       {edit && <MedModal med={edit} onClose={() => setEdit(null)} onSave={(m, remind) => {
-        let taskIds = m.taskIds || [];
-        if (taskIds.length) onDeleteTasks(taskIds);
-        taskIds = [];
-        if (remind && m.active !== false) {
-          (m.times || []).forEach((tm) => {
-            const task = mkTask({ title: `💊 ${m.name}${m.dose ? ` (${m.dose})` : ""}`, dueAt: nextAt(tm), recurrence: { type: "daily" }, alarmMode: true });
-            taskIds.push(task.id); onCreateTask(task);
-          });
-        }
-        const saved = { ...m, taskIds, remind: !!remind };
-        upd((h) => ({ ...h, meds: m.id ? arr(h, "meds").map((x) => (x.id === m.id ? saved : x)) : [...arr(h, "meds"), { ...saved, id: uidW() }] }));
+        const id = m.id || uidW();
+        const title = `💊 ${m.name}${m.dose ? ` (${m.dose})` : ""}`;
+        const desired = remind && m.active !== false ? (m.times || []).map((tm) => ({ ...mkTask({ title, dueAt: nextAt(tm), recurrence: { type: "daily" }, alarmMode: true }), key: tm, keepDue: true })) : [];
+        onSyncTasks({ type: "med", id }, desired, m.taskIds || []);
+        const saved = { ...m, id, taskIds: [], remind: !!remind };
+        upd((h) => ({ ...h, meds: m.id ? arr(h, "meds").map((x) => (x.id === m.id ? saved : x)) : [...arr(h, "meds"), saved] }));
         setEdit(null);
-      }} onDelete={(m) => { onDeleteTasks(m.taskIds || []); upd((h) => ({ ...h, meds: arr(h, "meds").filter((x) => x.id !== m.id) })); setEdit(null); }} />}
+      }} onDelete={(m) => { onSyncTasks({ type: "med", id: m.id }, [], m.taskIds || []); upd((h) => ({ ...h, meds: arr(h, "meds").filter((x) => x.id !== m.id) })); setEdit(null); }} />}
       {restock && <RestockModal med={restock} canExpense={!!addExpense} onClose={() => setRestock(null)} onSave={(qty, cents) => {
         upd((h) => ({ ...h, meds: arr(h, "meds").map((x) => (x.id === restock.id ? { ...x, stock: (x.stock || 0) + qty } : x)) }));
         if (cents > 0 && addExpense) addExpense(cents, `${t("Farmácia")}: ${restock.name}`);
@@ -224,7 +219,7 @@ function RestockModal({ med, onClose, onSave, canExpense }) {
 
 /* ------------------------------ 2. Consultas e exames ------------------------------ */
 const APPT_KINDS = [["consulta", "Consulta"], ["exame", "Exame"]];
-function Appts({ hx, upd, onBack, onCreateTask, onDeleteTasks, onOpenAttachment }) {
+function Appts({ hx, upd, onBack, onSyncTasks, onOpenAttachment }) {
   const items = arr(hx, "appts");
   const [edit, setEdit] = useState(null);
   const day = today();
@@ -248,7 +243,7 @@ function Appts({ hx, upd, onBack, onCreateTask, onDeleteTasks, onOpenAttachment 
           </div>
           <button className="text-xs font-semibold" style={{ color: C.primary }} onClick={() => setEdit(x)}>{t("Editar")}</button>
         </div>
-        {x.status !== "realizada" && <button className="mt-2 text-xs font-semibold" style={{ color: C.primary }} onClick={() => upd((h) => ({ ...h, appts: arr(h, "appts").map((y) => (y.id === x.id ? { ...y, status: "realizada" } : y)) }))}>✔ {t("Marcar como realizada")}</button>}
+        {x.status !== "realizada" && <button className="mt-2 text-xs font-semibold" style={{ color: C.primary }} onClick={() => { onSyncTasks({ type: "appt", id: x.id }, [], x.taskId ? [x.taskId] : []); upd((h) => ({ ...h, appts: arr(h, "appts").map((y) => (y.id === x.id ? { ...y, status: "realizada", taskId: null } : y)) })); }}>✔ {t("Marcar como realizada")}</button>}
         {rn && <button className="mt-2 ml-3 text-xs font-semibold" style={{ color: C.primary }} onClick={() => setEdit({ ...x, id: null, status: "agendada", date: rn, taskId: null, attachments: [] })}>{t("Agendar novo")}</button>}
       </Card>
     );
@@ -258,16 +253,15 @@ function Appts({ hx, upd, onBack, onCreateTask, onDeleteTasks, onOpenAttachment 
       {items.length === 0 && <Empty text={t("Registe consultas e exames; defina a validade de exames de rotina para ser avisado quando renovar.")} />}
       {upcoming.length > 0 && <div className="space-y-2"><div className="text-xs font-bold uppercase" style={{ color: C.inkSoft }}>{t("Agendadas")}</div>{upcoming.map((x) => <Row key={x.id} x={x} />)}</div>}
       {done.length > 0 && <div className="space-y-2"><div className="text-xs font-bold uppercase" style={{ color: C.inkSoft }}>{t("Histórico")}</div>{done.map((x) => <Row key={x.id} x={x} />)}</div>}
-      {edit && <ApptModal item={edit} onClose={() => setEdit(null)} onDelete={(x) => { if (x.taskId) onDeleteTasks([x.taskId]); upd((h) => ({ ...h, appts: arr(h, "appts").filter((y) => y.id !== x.id) })); setEdit(null); }}
+      {edit && <ApptModal item={edit} onClose={() => setEdit(null)} onDelete={(x) => { onSyncTasks({ type: "appt", id: x.id }, [], x.taskId ? [x.taskId] : []); upd((h) => ({ ...h, appts: arr(h, "appts").filter((y) => y.id !== x.id) })); setEdit(null); }}
         onSave={(x, remind) => {
-          let taskId = x.taskId || null;
-          if (taskId) { onDeleteTasks([taskId]); taskId = null; }
-          if (remind && x.status !== "realizada") {
-            const due = new Date(`${x.date}T${x.time || "09:00"}:00`);
-            if (due.getTime() > Date.now()) { const task = mkTask({ title: `🩺 ${x.title}`, description: x.place || "", dueAt: due.toISOString(), reminders: [{ id: uidW(), value: 1, unit: "days" }, { id: uidW(), value: 2, unit: "hours" }] }); taskId = task.id; onCreateTask(task); }
-          }
-          const saved = { ...x, taskId };
-          upd((h) => ({ ...h, appts: x.id ? arr(h, "appts").map((y) => (y.id === x.id ? saved : y)) : [...arr(h, "appts"), { ...saved, id: uidW() }] }));
+          const id = x.id || uidW();
+          const due = new Date(`${x.date}T${x.time || "09:00"}:00`);
+          const desired = remind && x.status !== "realizada" && due.getTime() > Date.now()
+            ? [{ ...mkTask({ title: `🩺 ${x.title}`, description: x.place || "", dueAt: due.toISOString(), reminders: [{ id: uidW(), value: 1, unit: "days" }, { id: uidW(), value: 2, unit: "hours" }] }), key: "appt", keepDue: false }] : [];
+          onSyncTasks({ type: "appt", id }, desired, x.taskId ? [x.taskId] : []);
+          const saved = { ...x, id, taskId: null };
+          upd((h) => ({ ...h, appts: x.id ? arr(h, "appts").map((y) => (y.id === x.id ? saved : y)) : [...arr(h, "appts"), saved] }));
           setEdit(null);
         }} />}
     </Page>
@@ -649,10 +643,10 @@ function Meals({ hx, upd, onBack, generateMealPlan }) {
 }
 
 /* ------------------------------ roteador ------------------------------ */
-export function WellnessSub({ id, health, setHealth, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense, generateMealPlan }) {
+export function WellnessSub({ id, health, setHealth, onBack, tasks, onCreateTask, onDeleteTasks, onSyncTasks, onOpenAttachment, addExpense, generateMealPlan }) {
   const hx = normalizeHx(health);
   const upd = (fn) => setHealth((h) => fn(normalizeHx(h)));
-  const p = { hx, upd, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense, generateMealPlan };
+  const p = { hx, upd, onBack, tasks, onCreateTask, onDeleteTasks, onSyncTasks, onOpenAttachment, addExpense, generateMealPlan };
   switch (id) {
     case "meds": return <Meds {...p} />;
     case "appts": return <Appts {...p} />;

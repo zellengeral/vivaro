@@ -122,3 +122,6 @@ Ações dos Objetivos podem trazer ligações propostas pela IA (hidratação, c
 
 ## v1.7.1
 Objetivos: layout móvel reorganizado (ações, chips e botões empilhados). "Estruturar tarefa com IA" em streaming (subtarefas aparecem à medida que chegam). Cardápio com quantidades por ingrediente, gerado em blocos paralelos; planos antigos podem ser regenerados.
+
+## v1.7.2
+Correções: botão Salvar do editor de tarefas (ficava por baixo do menu inferior), campo de comentários responsivo, e sincronização idempotente das tarefas de medicamentos/consultas (guardar de novo não duplica lembretes; remove duplicados antigos).
