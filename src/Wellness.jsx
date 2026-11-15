@@ -542,7 +542,7 @@ function WorkoutModal({ onClose, onSave }) {
 
 /* ------------------------------ 8. Refeições e jejum ------------------------------ */
 const FAST_PROTOS = [12, 14, 16, 18, 20];
-function Meals({ hx, upd, onBack }) {
+function Meals({ hx, upd, onBack, generateMealPlan }) {
   const meals = arr(hx, "meals"), fastLog = arr(hx, "fastLog"), fasting = hx.fasting;
   const [target, setTarget] = useState(16); const [adv, setAdv] = useState(false); const [kcal, setKcal] = useState(""); const [prot, setProt] = useState(""); const [carb, setCarb] = useState(""); const [fat, setFat] = useState("");
   const [, tick] = useState(0);
@@ -561,18 +561,52 @@ function Meals({ hx, upd, onBack }) {
   const planToday = plan && plan.days.find((d) => d.date === day);
   const SLOT = { breakfast: "Pequeno-almoço", lunch: "Almoço", snack: "Lanche", dinner: "Jantar" };
   const [showPlan, setShowPlan] = useState(false);
+  const [openDay, setOpenDay] = useState(null);
+  const [regen, setRegen] = useState(false);
+  const [regenErr, setRegenErr] = useState("");
+  const hasQty = plan && plan.days.some((d) => d.meals.some((m) => (m.ingredients || []).length));
+  const Meal = ({ m }) => (
+    <div className="py-1.5">
+      <div className="flex justify-between gap-2 text-sm" style={{ color: C.ink }}><span className="min-w-0 break-words"><span className="text-xs" style={{ color: C.inkSoft }}>{t(SLOT[m.slot] || m.slot)} · </span><b className="font-semibold">{m.name}</b></span><span className="text-xs flex-shrink-0" style={{ color: C.inkSoft }}>{m.kcal} kcal</span></div>
+      {(m.ingredients || []).length > 0 && <ul className="mt-0.5 pl-3 text-xs space-y-0.5" style={{ color: C.inkSoft }}>{m.ingredients.map((g, i) => <li key={i}>• {g.item}{g.quantity ? ` — ${g.quantity}` : ""}</li>)}</ul>}
+    </div>
+  );
+  const regenerate = async () => {
+    setRegen(true); setRegenErr("");
+    try { const np = await generateMealPlan({ kcalTarget: plan.kcalTarget, days: Math.min(30, Math.max(7, plan.days.length)), note: "" }); upd((h) => ({ ...h, mealPlan: np })); }
+    catch (e) { setRegenErr(e.message || ""); }
+    setRegen(false);
+  };
   return (
     <Page title={t("Refeições e jejum")} onBack={onBack}>
       {plan && (
         <Card>
           <div className="flex items-center justify-between mb-2"><div className="font-bold text-sm" style={{ color: C.ink }}>🍎 {planToday ? t("Cardápio de hoje") : t("Plano de cardápio")}</div><div className="text-xs" style={{ color: C.inkSoft }}>~{plan.kcalTarget} kcal</div></div>
-          {planToday ? planToday.meals.map((m, i) => <div key={i} className="flex justify-between text-sm py-0.5" style={{ color: C.ink }}><span><span className="text-xs" style={{ color: C.inkSoft }}>{t(SLOT[m.slot] || m.slot)} · </span>{m.name}</span><span className="text-xs" style={{ color: C.inkSoft }}>{m.kcal} kcal</span></div>)
+          {planToday ? <div className="divide-y" style={{ borderColor: C.border }}>{planToday.meals.map((m, i) => <Meal key={i} m={m} />)}</div>
             : <div className="text-xs" style={{ color: C.inkSoft }}>{t("O plano não cobre o dia de hoje.")}</div>}
+          {!hasQty && generateMealPlan && (
+            <div className="mt-2 p-2.5 rounded-xl text-xs" style={{ background: C.surfaceSunk, color: C.inkSoft }}>
+              {t("Este plano não tem quantidades dos ingredientes.")}
+              <div className="mt-1.5"><Btn kind="ghost" disabled={regen} onClick={regenerate}>{regen ? t("A gerar…") : t("Gerar de novo com quantidades")}</Btn></div>
+              {regenErr && <div className="mt-1" style={{ color: C.danger }}>{regenErr}</div>}
+            </div>
+          )}
           <div className="flex gap-4 mt-2">
             <button className="text-xs font-semibold" style={{ color: C.primary }} onClick={() => setShowPlan(!showPlan)}>{showPlan ? t("Ocultar plano") : t("Ver plano completo")} ({plan.days.length} {t("dias")})</button>
             <button className="text-xs font-semibold" style={{ color: C.danger }} onClick={() => upd((h) => ({ ...h, mealPlan: null }))}>{t("Apagar plano")}</button>
           </div>
-          {showPlan && <div className="mt-3 space-y-2 max-h-72 overflow-y-auto">{plan.days.map((d) => <div key={d.date} className="text-xs" style={{ color: C.inkSoft }}><b style={{ color: C.ink }}>{fmtDay(d.date)}</b> — {d.meals.map((m) => m.name).join(" · ")} ({d.meals.reduce((a, m) => a + m.kcal, 0)} kcal)</div>)}</div>}
+          {showPlan && (
+            <div className="mt-3 space-y-1 max-h-96 overflow-y-auto">
+              {plan.days.map((d) => (
+                <div key={d.date} className="rounded-lg" style={{ background: openDay === d.date ? C.surfaceSunk : "transparent" }}>
+                  <button className="w-full flex justify-between text-xs py-1.5 px-2" style={{ color: C.ink }} onClick={() => setOpenDay(openDay === d.date ? null : d.date)}>
+                    <b>{fmtDay(d.date)}</b><span style={{ color: C.inkSoft }}>{d.meals.reduce((a, m) => a + m.kcal, 0)} kcal {openDay === d.date ? "▲" : "▼"}</span>
+                  </button>
+                  {openDay === d.date && <div className="px-2 pb-2">{d.meals.map((m, i) => <Meal key={i} m={m} />)}</div>}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="text-[11px] mt-2" style={{ color: C.inkSoft }}>{t("Sugestão gerada por IA; não substitui um nutricionista.")}</div>
         </Card>
       )}
@@ -615,10 +649,10 @@ function Meals({ hx, upd, onBack }) {
 }
 
 /* ------------------------------ roteador ------------------------------ */
-export function WellnessSub({ id, health, setHealth, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense }) {
+export function WellnessSub({ id, health, setHealth, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense, generateMealPlan }) {
   const hx = normalizeHx(health);
   const upd = (fn) => setHealth((h) => fn(normalizeHx(h)));
-  const p = { hx, upd, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense };
+  const p = { hx, upd, onBack, tasks, onCreateTask, onDeleteTasks, onOpenAttachment, addExpense, generateMealPlan };
   switch (id) {
     case "meds": return <Meds {...p} />;
     case "appts": return <Appts {...p} />;

@@ -404,6 +404,37 @@ async function callWithRetry(prompt, model, opts = {}) {
   }
 }
 
+// Resposta em streaming (SSE): o texto vai chegando e onText recebe o acumulado — a interface mostra resultados enquanto a IA ainda escreve.
+async function streamGemini(prompt, opts, onText) {
+  if (!GEMINI_API_KEY) throw new Error("A chave da API do Gemini ainda não foi configurada nesta implantação.");
+  const model = workingGeminiModel || GEMINI_MODEL_CANDIDATES[0];
+  const thinking = thinkingFor(model, opts.think);
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json", ...(opts.schema ? { responseSchema: opts.schema } : {}), temperature: 0.4, maxOutputTokens: opts.maxTokens || 1500, ...(thinking ? { thinkingConfig: thinking } : {}) },
+    }),
+  });
+  if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  let buf = "", text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      try { const part = JSON.parse(line.slice(5)).candidates?.[0]?.content?.parts?.[0]?.text; if (part) { text += part; onText && onText(text); } } catch (e) { /* linha parcial */ }
+    }
+  }
+  if (!text.trim()) throw new Error("stream vazio");
+  return text;
+}
+
 // Percorre os modelos candidatos (o que já funcionou primeiro), com retry em erros transitórios.
 async function generateWithFallback(prompt, opts = {}) {
   if (!GEMINI_API_KEY) throw new Error("A chave da API do Gemini ainda não foi configurada nesta implantação.");
@@ -429,31 +460,60 @@ async function generateWithFallback(prompt, opts = {}) {
 // ---------- Plano de cardápio (ligação Objetivos → Nutrição) ----------
 const MEAL_SCHEMA = {
   type: "OBJECT",
-  properties: { days: { type: "ARRAY", items: { type: "OBJECT", properties: { day: { type: "INTEGER" }, meals: { type: "ARRAY", items: { type: "OBJECT", properties: { slot: { type: "STRING", enum: ["breakfast", "lunch", "snack", "dinner"] }, name: { type: "STRING" }, kcal: { type: "INTEGER" } }, required: ["slot", "name", "kcal"] } } }, required: ["day", "meals"] } } },
+  properties: { days: { type: "ARRAY", items: { type: "OBJECT", properties: { day: { type: "INTEGER" }, meals: { type: "ARRAY", items: { type: "OBJECT", properties: {
+    slot: { type: "STRING", enum: ["breakfast", "lunch", "snack", "dinner"] }, name: { type: "STRING" }, kcal: { type: "INTEGER" },
+    ingredients: { type: "ARRAY", items: { type: "OBJECT", properties: { item: { type: "STRING" }, quantity: { type: "STRING" } }, required: ["item", "quantity"] } },
+  }, required: ["slot", "name", "kcal", "ingredients"] } } }, required: ["day", "meals"] } } },
   required: ["days"],
 };
+// Gera o cardápio em blocos de 6 dias, em paralelo (mais rápido e com menos risco de resposta cortada). Cada ingrediente leva quantidade.
 async function generateMealPlan({ kcalTarget, days, note }) {
-  const system = `És um assistente de planeamento alimentar. Cria um cardápio de ${days} dias, saudável, variado, simples de cozinhar e com ingredientes comuns, em ${langInfo().ai}. Cada dia tem 4 refeições (breakfast, lunch, snack, dinner) cuja soma de calorias fica a ±5% de ${kcalTarget} kcal. Nomes curtos (máx. 8 palavras), sem repetir o mesmo prato principal em dias consecutivos. Não dês conselhos médicos. Responde só com JSON conforme o esquema.`;
-  const raw = await generateWithFallback(`META: ${kcalTarget} kcal/dia\nDIAS: ${days}\nPREFERÊNCIAS/NOTAS: ${note || "(nenhuma)"}`, { system, schema: MEAL_SCHEMA, maxTokens: 12000 });
-  let data = null;
-  try { data = JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) { const a = raw.indexOf("{"), b = raw.lastIndexOf("}"); if (a !== -1 && b > a) { try { data = JSON.parse(raw.slice(a, b + 1)); } catch (e2) { /* ignore */ } } }
-  if (!data || !Array.isArray(data.days) || !data.days.length) throw new Error("A IA não devolveu um plano válido. Tente novamente.");
+  const CHUNK = 6;
+  const parseJson = (raw) => { try { return JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) { const a = raw.indexOf("{"), b = raw.lastIndexOf("}"); if (a !== -1 && b > a) { try { return JSON.parse(raw.slice(a, b + 1)); } catch (e2) { return null; } } return null; } };
+  const jobs = [];
+  for (let start = 0; start < days; start += CHUNK) jobs.push({ start, n: Math.min(CHUNK, days - start) });
+  const results = await Promise.all(jobs.map(async ({ start, n }, idx) => {
+    const system = `És um assistente de planeamento alimentar. Cria o cardápio dos dias ${start + 1} a ${start + n} (de um plano de ${days} dias), saudável, variado, simples de cozinhar e com ingredientes comuns, em ${langInfo().ai}. Cada dia tem 4 refeições (breakfast, lunch, snack, dinner) cuja soma de calorias fica a ±5% de ${kcalTarget} kcal. Cada refeição lista TODOS os ingredientes com QUANTIDADE precisa em unidades caseiras ou gramas (ex.: "150 g", "2 unidades", "1 colher de sopa", "200 ml"). Nomes de prato curtos; não repitas o prato principal em dias consecutivos; varia proteínas e acompanhamentos (bloco ${idx + 1} de ${jobs.length}). Não dês conselhos médicos. Responde só com JSON conforme o esquema; "day" é o número do dia no plano (${start + 1} a ${start + n}).`;
+    const raw = await generateWithFallback(`META: ${kcalTarget} kcal/dia\nDIAS: ${start + 1} a ${start + n}\nPREFERÊNCIAS/NOTAS: ${note || "(nenhuma)"}`, { system, schema: MEAL_SCHEMA, maxTokens: 8000 });
+    const data = parseJson(raw);
+    if (!data || !Array.isArray(data.days) || !data.days.length) throw new Error("A IA não devolveu um plano válido. Tente novamente.");
+    return data.days.slice(0, n).map((d, i) => ({ idx: start + i, meals: d.meals }));
+  }));
   const base = new Date(); base.setHours(12, 0, 0, 0);
+  const flat = results.flat().sort((a, b) => a.idx - b.idx);
   return {
-    id: uid(), createdAt: new Date().toISOString(), kcalTarget,
-    days: data.days.slice(0, days).map((d, i) => { const dt = new Date(base); dt.setDate(dt.getDate() + i); return { date: isoOf(dt), meals: (Array.isArray(d.meals) ? d.meals : []).map((m) => ({ slot: m.slot, name: String(m.name || "").trim(), kcal: Math.round(Number(m.kcal) || 0) })).filter((m) => m.name) }; }),
+    id: uid(), createdAt: new Date().toISOString(), kcalTarget, withQuantities: true,
+    days: flat.map((d) => {
+      const dt = new Date(base); dt.setDate(dt.getDate() + d.idx);
+      return { date: isoOf(dt), meals: (Array.isArray(d.meals) ? d.meals : []).map((m) => ({
+        slot: m.slot, name: String(m.name || "").trim(), kcal: Math.round(Number(m.kcal) || 0),
+        ingredients: (Array.isArray(m.ingredients) ? m.ingredients : []).map((g) => ({ item: String(g.item || "").trim(), quantity: String(g.quantity || "").trim() })).filter((g) => g.item),
+      })).filter((m) => m.name) };
+    }),
   };
 }
 
 // ---------- Estruturar tarefa com IA (subtarefas, prioridade, prazo sugerido) ----------
 const TASK_SCHEMA = {
   type: "OBJECT",
-  properties: { description: { type: "STRING" }, quadrant: { type: "INTEGER" }, dueInDays: { type: "INTEGER" }, subtasks: { type: "ARRAY", items: { type: "STRING" } }, reminderHoursBefore: { type: "INTEGER" } },
+  properties: { subtasks: { type: "ARRAY", items: { type: "STRING" } }, quadrant: { type: "INTEGER" }, dueInDays: { type: "INTEGER" }, reminderHoursBefore: { type: "INTEGER" }, description: { type: "STRING" } },
   required: ["subtasks", "quadrant"],
+  propertyOrdering: ["subtasks", "quadrant", "dueInDays", "reminderHoursBefore", "description"],
 };
-async function structureTask({ title, description, category }) {
-  const system = `Transformas uma tarefa vaga numa tarefa executável. Devolve: 3 a 8 subtarefas pequenas, concretas e por ordem de execução (começam por um verbo); uma descrição curta (1–2 frases) só se a tarefa ainda não tiver; "quadrant" pela matriz de Eisenhower (1 urgente+importante, 2 importante, 3 urgente, 4 nenhum); "dueInDays" (dias a partir de hoje) realista, ou 0 se não houver urgência clara; "reminderHoursBefore" (horas) opcional. Escreve em ${langInfo().ai}. Não inventes factos. Responde só com JSON conforme o esquema.`;
-  const raw = await generateWithFallback(`TAREFA: ${title}\nDESCRIÇÃO: ${description || "(vazia)"}\nÁREA: ${category || "pessoal"}\nHoje: ${new Date().toISOString().slice(0, 10)}`, { system, schema: TASK_SCHEMA, maxTokens: 1500 });
+// Extrai as strings já completas do array "subtasks" de um JSON ainda incompleto
+function partialSubtasks(text) {
+  const m = text.match(/"subtasks"\s*:\s*\[/); if (!m) return [];
+  const out = []; const re = /"((?:[^"\\]|\\.)*)"\s*(,|\])/g; re.lastIndex = m.index + m[0].length;
+  let x; while ((x = re.exec(text))) { try { out.push(JSON.parse(`"${x[1]}"`)); } catch (e) { out.push(x[1]); } if (x[2] === "]") break; }
+  return out;
+}
+async function structureTask({ title, description, category }, onPartial) {
+  const system = `Transformas uma tarefa vaga em passos executáveis. Devolve: 3 a 6 subtarefas curtas, concretas, por ordem (verbo no início); quadrant de Eisenhower (1 urgente+importante, 2 importante, 3 urgente, 4 nenhum); dueInDays realista (0 se não houver urgência); reminderHoursBefore opcional; description de 1 frase só se a tarefa não tiver. Idioma: ${langInfo().ai}. Só JSON.`;
+  const prompt = `TAREFA: ${title}\nDESCRIÇÃO: ${description || "-"}\nÁREA: ${category || "pessoal"}\nHoje: ${new Date().toISOString().slice(0, 10)}`;
+  const opts = { system, schema: TASK_SCHEMA, maxTokens: 700 };
+  let raw = "";
+  try { raw = await streamGemini(prompt, opts, onPartial ? (txt) => onPartial(partialSubtasks(txt)) : null); }
+  catch (e) { raw = await generateWithFallback(prompt, opts); } // sem streaming/modelo indisponível: caminho normal com fallback
   let data = null;
   try { data = JSON.parse(raw.trim().replace(/^```json\s*|^```\s*|```$/gi, "").trim()); } catch (e) { const a = raw.indexOf("{"), b = raw.lastIndexOf("}"); if (a !== -1 && b > a) { try { data = JSON.parse(raw.slice(a, b + 1)); } catch (e2) { /* ignore */ } } }
   if (!data || !Array.isArray(data.subtasks) || !data.subtasks.length) throw new Error("A IA não devolveu uma estrutura válida. Tente novamente.");
@@ -1866,9 +1926,11 @@ function TaskModal({ initial, voicePrefill, onSave, onClose, onOpenAttachment, o
     if (!form.title.trim() || aiBusy) return;
     setAiBusy(true); setAiMsg("");
     try {
-      const r = await onStructure({ title: form.title.trim(), description: form.description, category: form.category });
+      const baseSubs = form.subtasks;
+      const mk = (list) => list.map((x, i) => ({ id: `ai${i}`, title: x, done: false }));
+      const r = await onStructure({ title: form.title.trim(), description: form.description, category: form.category }, (partial) => setForm((f) => ({ ...f, subtasks: [...baseSubs, ...mk(partial)] })));
       setForm((f) => {
-        const next = { ...f, quadrant: r.quadrant, subtasks: [...f.subtasks, ...r.subtasks.map((x) => ({ id: uid(), title: x, done: false }))] };
+        const next = { ...f, quadrant: r.quadrant, subtasks: [...baseSubs, ...r.subtasks.map((x) => ({ id: uid(), title: x, done: false }))] };
         if (!f.description.trim() && r.description) next.description = r.description;
         if (!f.dueDate && r.dueInDays > 0) { const d = new Date(); d.setDate(d.getDate() + r.dueInDays); next.dueDate = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
         if (r.reminderHoursBefore > 0 && next.dueDate && !f.reminders.length) next.reminders = [{ id: uid(), value: r.reminderHoursBefore, unit: "hours" }];
@@ -2895,7 +2957,7 @@ export default function App() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-28">
         {moduleId === "objetivos" && <GoalsView goals={goals} setGoals={setGoals} tasks={tasks} onCreateTask={addTaskDirect} onStructure={structureGoal} aiAvailable={!!GEMINI_API_KEY} bridge={{ apply: bridgeApply, navigate: bridgeNavigate, currency: finance.currency }} />}
         {moduleId === "financas" && <FinanceView fin={finance} setFin={setFinance} onCreateTask={addTaskDirect} />}
-        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
+        {moduleId === "saude" && <HealthView health={health} onChange={updateHydration} onAdd={addWater} onRemove={removeWater} onTest={isNative ? nativeTestWater : null} wellness={{ health, setHealth, tasks, generateMealPlan, onCreateTask: addTaskDirect, onDeleteTasks: deleteTasksByIds, onOpenAttachment: openAttachment, addExpense }} />}
         {moduleId === "tarefas" && view === "dashboard" && <DashboardView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "kanban" && <KanbanView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}
         {moduleId === "tarefas" && view === "lista" && <ListView tasks={tasks} filters={filters} setFilters={setFilters} activeQuadrant={activeQuadrant} setActiveQuadrant={setActiveQuadrant} {...cardHandlers} />}

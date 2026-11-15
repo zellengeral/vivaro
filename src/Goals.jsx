@@ -23,25 +23,29 @@ function taskFromAction(goal, proc, a) {
 function LinkChip({ link, cur, mode, busy, onToggle, onApply, onGo, onRemove }) {
   const def = LINK_TYPES[link.key]; if (!def) return null;
   const meta = MODULE_META[def.module] || {};
-  const text = `${t(def.title)}: ${def.describe(link.payload_data, cur)}`;
-  const base = "inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg max-w-full";
+  const detail = `${t(def.title)}: ${def.describe(link.payload_data, cur)}`;
+  const base = "inline-flex items-start gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg max-w-full text-left leading-snug";
+  const body = (prefix) => (
+    <span className="min-w-0 break-words">
+      <span className="font-semibold">{prefix}{meta.emoji} {t(meta.label)}</span>
+      <span className="block font-normal opacity-90">{detail}</span>
+    </span>
+  );
   if (link.status === "applied")
-    return <button onClick={onGo} className={base} style={{ background: C.primarySoft, color: C.primary }} title={t("Abrir módulo")}>✓ {meta.emoji} {t(meta.label)} · <span className="font-normal truncate">{text}</span></button>;
+    return <button onClick={onGo} className={base} style={{ background: C.primarySoft, color: C.primary }} title={t("Abrir módulo")}>{body("✓ ")}</button>;
   if (mode === "draft")
     return (
-      <span className="inline-flex items-center gap-1 max-w-full">
-        <button onClick={onToggle} className={base} style={{ background: link.accepted ? C.primarySoft : C.surfaceSunk, color: link.accepted ? C.primary : C.inkSoft, border: `1px dashed ${link.accepted ? C.primary : C.border}` }}>
-          <span>{link.accepted ? "☑" : "☐"}</span> 🔗 {meta.emoji} {t(meta.label)} · <span className="font-normal truncate">{text}</span>
-        </button>
-        <button onClick={onRemove} style={{ color: C.inkSoft }} aria-label={t("Apagar")}><X size={13} /></button>
+      <span className="inline-flex items-start gap-1.5 max-w-full">
+        <button onClick={onToggle} className={base} style={{ background: link.accepted ? C.primarySoft : C.surfaceSunk, color: link.accepted ? C.primary : C.inkSoft, border: `1px dashed ${link.accepted ? C.primary : C.border}` }}>{body(`${link.accepted ? "☑" : "☐"} 🔗 `)}</button>
+        <button onClick={onRemove} className="p-1" style={{ color: C.inkSoft }} aria-label={t("Apagar")}><X size={14} /></button>
       </span>
     );
   return (
-    <span className="inline-flex flex-col gap-0.5">
+    <span className="inline-flex flex-col gap-1 max-w-full">
       <button disabled={busy} onClick={onApply} className={`${base} disabled:opacity-50`} style={{ background: C.surfaceSunk, color: C.primary, border: `1px dashed ${C.primary}` }}>
-        🔗 {meta.emoji} {busy ? t("A ligar…") : `${t("Ligar")} · ${text}`}
+        {busy ? <span className="font-semibold">{t("A ligar…")}</span> : body(`🔗 ${t("Ligar")} · `)}
       </button>
-      {link.error && <span className="text-[11px]" style={{ color: C.danger }}>{link.error}</span>}
+      {link.error && <span className="text-[11px] break-words" style={{ color: C.danger }}>{link.error}</span>}
     </span>
   );
 }
@@ -130,13 +134,21 @@ export default function GoalsView({ goals, setGoals, tasks, onCreateTask, onStru
                   {p.actions.map((a) => {
                     const done = actionDone(a, tasks), linked = a.taskId && tasks.some((x) => x.id === a.taskId);
                     return (
-                      <div key={a.id} className="flex items-center gap-2.5 py-1.5">
-                        <button onClick={() => toggleAction(goal, p, a)} className="w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0" style={{ borderColor: done ? C.primary : C.border, background: done ? C.primary : "transparent" }} aria-label={t("Concluir")}>{done && <Check size={13} color="#fff" />}</button>
-                        <div className="flex-1 min-w-0"><div className="text-sm" style={{ color: done ? C.inkSoft : C.ink, textDecoration: done ? "line-through" : "none" }}>{a.title}</div>
-                          {a.dueDate && <div className="text-[11px]" style={{ color: !done && a.dueDate < todayStr() ? C.danger : C.inkSoft }}>{fmt(a.dueDate)}</div>}
-                          {a.link && <div className="mt-1"><LinkChip link={a.link} cur={cur} mode="detail" busy={busyLink === a.id} onApply={() => applyOne(goal, p, a)} onGo={() => bridge.navigate(MODULE_META[LINK_TYPES[a.link.key]?.module]?.nav)} /></div>}</div>
-                        {linked ? <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: C.primarySoft, color: C.primary }}>{t("Tarefa")} ✓</span>
-                          : !done && <button onClick={() => makeTask(goal, p, a)} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: C.surfaceSunk, color: C.primary }}><CalendarPlus size={12} />{t("Criar tarefa")}</button>}
+                      <div key={a.id} className="py-2.5" style={{ borderTop: `1px solid ${C.border}` }}>
+                        <div className="flex items-start gap-2.5">
+                          <button onClick={() => toggleAction(goal, p, a)} className="w-5 h-5 mt-0.5 rounded-md border flex items-center justify-center flex-shrink-0" style={{ borderColor: done ? C.primary : C.border, background: done ? C.primary : "transparent" }} aria-label={t("Concluir")}>{done && <Check size={13} color="#fff" />}</button>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm leading-snug break-words" style={{ color: done ? C.inkSoft : C.ink, textDecoration: done ? "line-through" : "none" }}>{a.title}</div>
+                            {a.dueDate && <div className="text-[11px] mt-0.5" style={{ color: !done && a.dueDate < todayStr() ? C.danger : C.inkSoft }}>{fmt(a.dueDate)}</div>}
+                          </div>
+                        </div>
+                        {(a.link || linked || !done) && (
+                          <div className="mt-2 ml-[30px] flex flex-wrap items-start gap-2">
+                            {a.link && <LinkChip link={a.link} cur={cur} mode="detail" busy={busyLink === a.id} onApply={() => applyOne(goal, p, a)} onGo={() => bridge.navigate(MODULE_META[LINK_TYPES[a.link.key]?.module]?.nav)} />}
+                            {linked ? <span className="text-[11px] px-2.5 py-1.5 rounded-lg" style={{ background: C.primarySoft, color: C.primary }}>✓ {t("Tarefa")}</span>
+                              : !done && <button onClick={() => makeTask(goal, p, a)} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg" style={{ background: C.surfaceSunk, color: C.primary }}><CalendarPlus size={12} />{t("Criar tarefa")}</button>}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -254,22 +266,24 @@ function DraftSheet({ draft, setDraft, onSave, onStructure, aiAvailable, cur, ru
           )}
           {g.processes.map((p, i) => (
             <div key={p.id} className="rounded-xl p-3 space-y-2" style={{ border: `1px solid ${C.border}`, background: C.surfaceSunk }}>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold w-5 text-center" style={{ color: C.primary }}>{i + 1}</span>
-                <input className={`${small} flex-1 min-w-0 font-semibold`} style={inputSt} value={p.title} onChange={(e) => setP(p.id, (x) => ({ ...x, title: e.target.value }))} />
-                <input type="date" className={`${small} w-[8.5rem]`} style={inputSt} value={p.dueDate || ""} onChange={(e) => setP(p.id, (x) => ({ ...x, dueDate: e.target.value }))} />
-                <button onClick={() => setG((x) => ({ ...x, processes: x.processes.filter((q) => q.id !== p.id) }))} style={{ color: C.inkSoft }}><Trash2 size={15} /></button>
+              <div className="flex items-start gap-2">
+                <span className="text-xs font-bold w-5 text-center pt-2" style={{ color: C.primary }}>{i + 1}</span>
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <input className={`${small} w-full font-semibold`} style={inputSt} value={p.title} onChange={(e) => setP(p.id, (x) => ({ ...x, title: e.target.value }))} />
+                  <div className="flex items-center gap-2"><span className="text-[11px]" style={{ color: C.inkSoft }}>{t("até")}</span><input type="date" className={`${small} flex-1 min-w-0`} style={inputSt} value={p.dueDate || ""} onChange={(e) => setP(p.id, (x) => ({ ...x, dueDate: e.target.value }))} /></div>
+                </div>
+                <button onClick={() => setG((x) => ({ ...x, processes: x.processes.filter((q) => q.id !== p.id) }))} className="p-1.5" style={{ color: C.inkSoft }} aria-label={t("Apagar")}><Trash2 size={16} /></button>
               </div>
-              <div className="pl-7 space-y-1.5">
+              <div className="pl-2 space-y-2.5">
                 {p.actions.map((a) => (
-                  <React.Fragment key={a.id}>
-                  <div className="flex items-center gap-2">
-                    <input className={`${small} flex-1 min-w-0`} style={inputSt} value={a.title} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, title: e.target.value }))} />
-                    <input type="date" className={`${small} w-[8.5rem]`} style={inputSt} value={a.dueDate || ""} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, dueDate: e.target.value }))} />
-                    <button onClick={() => setP(p.id, (x) => ({ ...x, actions: x.actions.filter((q) => q.id !== a.id) }))} style={{ color: C.inkSoft }}><X size={15} /></button>
+                  <div key={a.id} className="space-y-1.5 pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+                  <div className="flex items-start gap-2">
+                    <textarea rows={2} className={`${small} flex-1 min-w-0 resize-none leading-snug`} style={inputSt} value={a.title} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, title: e.target.value }))} />
+                    <button onClick={() => setP(p.id, (x) => ({ ...x, actions: x.actions.filter((q) => q.id !== a.id) }))} className="p-1.5" style={{ color: C.inkSoft }} aria-label={t("Apagar")}><X size={16} /></button>
                   </div>
-                  {a.link && <div className="pl-1 -mt-0.5 pb-1"><LinkChip link={a.link} cur={cur} mode="draft" onToggle={() => setA(p.id, a.id, (x) => ({ ...x, link: { ...x.link, accepted: !x.link.accepted } }))} onRemove={() => setA(p.id, a.id, (x) => ({ ...x, link: null }))} /></div>}
-                  </React.Fragment>
+                  <input type="date" className={`${small} w-full`} style={inputSt} value={a.dueDate || ""} onChange={(e) => setA(p.id, a.id, (x) => ({ ...x, dueDate: e.target.value }))} />
+                  {a.link && <div><LinkChip link={a.link} cur={cur} mode="draft" onToggle={() => setA(p.id, a.id, (x) => ({ ...x, link: { ...x.link, accepted: !x.link.accepted } }))} onRemove={() => setA(p.id, a.id, (x) => ({ ...x, link: null }))} /></div>}
+                  </div>
                 ))}
                 <button className="text-xs font-semibold" style={{ color: C.primary }} onClick={() => setP(p.id, (x) => ({ ...x, actions: [...x.actions, { id: uidG(), title: "", dueDate: x.dueDate || "", done: false, taskId: null }] }))}>+ {t("Ação")}</button>
               </div>

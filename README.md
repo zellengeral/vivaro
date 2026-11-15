@@ -119,3 +119,6 @@ Módulo **Objetivos**: objetivo final → processos → ações, "Estruturar com
 
 ## v1.7.0 — Ecossistema (Cross-Module Bridge)
 Ações dos Objetivos podem trazer ligações propostas pela IA (hidratação, cardápio de 30 dias, despesas/orçamento/cofrinho, tarefas repetidas), validadas por lista branca e aplicadas em cadeia ao guardar. "Estruturar tarefa com IA" no editor de tarefas. Ver `ECOSSISTEMA.md`.
+
+## v1.7.1
+Objetivos: layout móvel reorganizado (ações, chips e botões empilhados). "Estruturar tarefa com IA" em streaming (subtarefas aparecem à medida que chegam). Cardápio com quantidades por ingrediente, gerado em blocos paralelos; planos antigos podem ser regenerados.
